@@ -813,10 +813,10 @@ index 0000000000..9cb6da8afe
 +include ../build/Makefile.pkg
 diff --git a/packages/fcl-tls/README.md b/packages/fcl-tls/README.md
 new file mode 100644
-index 0000000000..06cedef856
+index 0000000000..6c8cf937c0
 --- /dev/null
 +++ b/packages/fcl-tls/README.md
-@@ -0,0 +1,180 @@
+@@ -0,0 +1,191 @@
 +# Client TLS selection and native Windows TLS
 +
 +This increment adds a Windows Schannel client and an opt-in `smartsslsockets`
@@ -997,15 +997,29 @@ index 0000000000..06cedef856
 +- [Microsoft Schannel decryption and renegotiation](https://learn.microsoft.com/en-us/windows/win32/secauthn/decryptmessage--schannel)
 +- [Microsoft Schannel shutdown](https://learn.microsoft.com/en-us/windows/win32/secauthn/shutting-down-an-schannel-connection)
 +- [GnuTLS session verification](https://gnutls.org/manual/html_node/Core-TLS-API.html#gnutls_005fsession_005fset_005fverify_005fcert)
++
++### macOS connection layer status
++
++A standalone Network.framework C bridge and Pascal TLS stream are now in
++`src/macos/networkframeworkbridge.c/.h` and `src/networkframeworktls.pp`. The
++20-case Pascal ABI model passes on Windows. Real macOS build/TLS validation,
++automatic C-object provisioning and fphttpclient/smart transport integration are
++pending; this is not yet a working macOS HTTP backend. See
++[macOS adapter](docs/macos-transport.md) for the native build and ownership
++contract. All GitHub Actions workflows and CI-only orchestration stay in the
++separate [test carrier](https://github.com/ACTom/fpc-macos-ci).
 diff --git a/packages/fcl-tls/docs/macos-transport.md b/packages/fcl-tls/docs/macos-transport.md
 new file mode 100644
-index 0000000000..d879e3b53f
+index 0000000000..6a28917062
 --- /dev/null
 +++ b/packages/fcl-tls/docs/macos-transport.md
-@@ -0,0 +1,192 @@
+@@ -0,0 +1,250 @@
 +# Proposed macOS connection adapter
 +
-+This is a design for the next increment, not implemented or tested macOS code.
++The standalone C connection bridge and Pascal stream are now implemented in
++source. Their real macOS compilation/runtime is pending. The HTTP ownership seam
++below is still a design; fphttpclient and smart Darwin registration have not
++been switched to the native transport.
 +
 +## Existing ownership constraint
 +
@@ -1195,6 +1209,61 @@ index 0000000000..d879e3b53f
 +is still required. This stage does not claim FPC Darwin compilation or native TLS
 +acceptance. A usable Darwin bootstrap compiler/RTL plus the adapter and real TLS
 +matrix are subsequent work, subject to explicit tool provisioning when needed.
++
++## Implemented connection layer (pending macOS validation)
++
++`src/macos/networkframeworkbridge.c/.h` implement one Network.framework-owned
++TCP+TLS connection. Required Network/Security/dispatch APIs are checked at runtime
++using the actual SDK function types and fixed system framework paths; the bridge
++adds no strong Network/Security framework dependency. Missing APIs return ENOSYS.
++A serial dispatch queue, mutex/condition and retained state/send/receive contexts
++bridge callbacks to synchronous operations. Buffers are bounded to 16 KiB, caller
++send data is copied, and callbacks never access Pascal caller buffers or objects.
++Close cancels and wakes waiters; late completions retain their C context and
++cannot write to released caller buffers. This close is cancellation and does not
++claim graceful TLS close_notify. Clean EOF requires the native final-context
++result without a native receive error; actual TLS truncation behavior is untested.
++
++True retains platform trust plus logical hostname verification. False accepts
++the supplied peer in a per-connection verification block. Neither changes TLS
++versions/ciphers, OS trust or the selected backend. Built-in verification failure
++is terminal. The Pascal stream's separate post-handshake veto cannot rescue it.
++
++`src/networkframeworktls.pp` provides Connect, Read, Write, CanRead,
++BytesAvailable and Close. It holds a C operation reference while Close detaches
++and releases the owner. Destruction drains the one active Pascal operation before
++destroying locks. Callers must serialize ordinary operations, coordinate all
++other callers before Free, and permit no queued/new calls during destruction.
++Close may interrupt that one active operation. On Unix, use cthreads first in
++the program's uses clause (or a compatible thread manager).
++
++The C bridge is statically linked with `FPC_NETWORK_FRAMEWORK_BRIDGE` on Darwin;
++other builds report a clear capability error. Build the C object with the
++installed authorized Apple SDK using the header's command, keep it matching the
++target architecture, and provide its object search path when compiling the
++Pascal program with `-dFPC_NETWORK_FRAMEWORK_BRIDGE`. The package currently builds
++the portable Pascal unit; automatic target C-object provisioning is not yet wired
++into fpmake. This deliberate build flag keeps an unvalidated backend from
++silently becoming the default transport. No third-party TLS library is required
++by this connection layer.
++
++`tests/testnetworkstream.pp` passed 20 Windows ABI model cases. They include
++False/True propagation, short IO, EOF, readiness deadlines, preserved native
++errors, veto exceptions, Close during connect/read/write/create, direct Free of
++a blocked read, and Close-then-Connect callback reentry. These are Pascal state
++checks, not Apple runtime evidence. The reentry regression was observed failing
++before its independent full-Connect guard was added.
++
++`tests/macos/testnetworkbridge.c` is an actual native integration harness. Its
++no-argument mode constructs/releases both configurations without starting a
++connection. Opt-in fixture modes cover ready/exact-domain-code rejection,
++fragmented 1 MiB echo, timeout reuse, terminal read deadline, concurrent close,
++clean EOF and TCP abort rejection. Certificate cases must supply a specific
++certificate-related domain/code expectation; any arbitrary transport failure
++cannot satisfy them. No native harness fixture has run yet. Both architectures,
++SDK/dynamic-symbol checks, TLS trust/hostname matrix, callback cancellation races,
++ASan/TSan, automatic C-object build integration and HTTP transport registration
++remain required before macOS HTTPS acceptance.
 diff --git a/packages/fcl-tls/docs/openssl-eof.md b/packages/fcl-tls/docs/openssl-eof.md
 new file mode 100644
 index 0000000000..475c795980
@@ -1292,10 +1361,10 @@ index 0000000000..475c795980
 +- [OpenSSL s_client diagnostics](https://docs.openssl.org/3.5/man1/openssl-s_client/)
 diff --git a/packages/fcl-tls/docs/validation.md b/packages/fcl-tls/docs/validation.md
 new file mode 100644
-index 0000000000..7a6b7bf23d
+index 0000000000..77612ae293
 --- /dev/null
 +++ b/packages/fcl-tls/docs/validation.md
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,233 @@
 +# Windows increment validation
 +
 +Recorded on 2026-10-05 against base commit
@@ -1511,12 +1580,30 @@ index 0000000000..7a6b7bf23d
 +runtime was tested. A separate existing GnuTLS same-handler reconnect/session
 +ownership issue was confirmed unchanged in the base commit; HTTP tests here
 +create fresh handlers. macOS execution remains pending the prepared CI stage.
++
++## macOS connection implementation on Windows
++
++The C Network.framework bridge and portable Pascal stream are implemented but
++are not macOS-validated. The 20-case testnetworkstream ABI model passes on
++Windows, including terminal error/EOF distinctions, partial IO, concurrent Close,
++creation generations, destruction of one blocked operation and callback
++Close-then-Connect reentry. The latter was first reproduced as a failing model
++case. The thread/caller contract is recorded in macos-transport.md. Native Apple
++compilation, real TLS certificate tests and the HTTP ownership seam remain NOT
++RUN/unimplemented. CI workflows and runner scripts are external to this FPC
++patch in ACTom/fpc-macos-ci.
++
++The final integrated offline runner exits 0 with 20 ABI model cases and all 87
++real local TLS cases. The current FPC 3.3.1 Windows package build also exits 0.
++The standalone model additionally compiles/runs with the existing FPC 3.2.2
++Windows bootstrap; this is not a Darwin compile or whole-branch compatibility
++claim. Previous public expired.badssl truncation failure remains in the record.
 diff --git a/packages/fcl-tls/fpmake.pp b/packages/fcl-tls/fpmake.pp
 new file mode 100644
-index 0000000000..494ef8e2af
+index 0000000000..11d280c6cb
 --- /dev/null
 +++ b/packages/fcl-tls/fpmake.pp
-@@ -0,0 +1,32 @@
+@@ -0,0 +1,33 @@
 +{$ifndef ALLPACKAGES}
 +{$mode objfpc}{$H+}
 +program fpmake;
@@ -1540,6 +1627,7 @@ index 0000000000..494ef8e2af
 +    P.Dependencies.Add('openssl');
 +    P.Dependencies.Add('gnutls');
 +    P.SourcePath.Add('src');
++    T:=P.Targets.AddUnit('networkframeworktls.pp');
 +    T:=P.Targets.AddUnit('tlsbackendpolicy.pp');
 +    T:=P.Targets.AddUnit('smartsslsockets.pp');
 +    T.Dependencies.AddUnit('tlsbackendpolicy');
@@ -1549,6 +1637,15 @@ index 0000000000..494ef8e2af
 +    end;
 +end.
 +{$endif}
+diff --git a/packages/fcl-tls/namespaced/System.Net.NetworkFrameworkTLS.pp b/packages/fcl-tls/namespaced/System.Net.NetworkFrameworkTLS.pp
+new file mode 100644
+index 0000000000..0b2465331d
+--- /dev/null
++++ b/packages/fcl-tls/namespaced/System.Net.NetworkFrameworkTLS.pp
+@@ -0,0 +1,3 @@
++unit System.Net.NetworkFrameworkTLS;
++{$DEFINE FPC_DOTTEDUNITS}
++{$i networkframeworktls.pp}
 diff --git a/packages/fcl-tls/namespaced/System.Net.SmartSSLSockets.pp b/packages/fcl-tls/namespaced/System.Net.SmartSSLSockets.pp
 new file mode 100644
 index 0000000000..98de57a49d
@@ -1569,14 +1666,1123 @@ index 0000000000..48e6249d5c
 +{$i tlsbackendpolicy.pp}
 diff --git a/packages/fcl-tls/namespaces.lst b/packages/fcl-tls/namespaces.lst
 new file mode 100644
-index 0000000000..4fc2f08d6d
+index 0000000000..452fe3dd98
 --- /dev/null
 +++ b/packages/fcl-tls/namespaces.lst
-@@ -0,0 +1,4 @@
+@@ -0,0 +1,5 @@
 +{s*:src/}=namespaced/
 +{i+:src/}
 +src/tlsbackendpolicy.pp=namespaced/System.Net.TLSBackendPolicy.pp
 +src/smartsslsockets.pp=namespaced/System.Net.SmartSSLSockets.pp
++src/networkframeworktls.pp=namespaced/System.Net.NetworkFrameworkTLS.pp
+diff --git a/packages/fcl-tls/src/macos/networkframeworkbridge.c b/packages/fcl-tls/src/macos/networkframeworkbridge.c
+new file mode 100644
+index 0000000000..fe216507ef
+--- /dev/null
++++ b/packages/fcl-tls/src/macos/networkframeworkbridge.c
+@@ -0,0 +1,607 @@
++/* Part of FCL; see COPYING.FPC.
++ * PENDING actual Apple SDK compilation and native runtime acceptance.
++ * See networkframeworkbridge.h for the build, ABI and ownership contracts.
++ */
++#if !defined(__APPLE__) || !defined(__MACH__)
++#error This bridge requires the actual macOS SDK and a Blocks-capable C compiler
++#endif
++#if defined(__OBJC__) || defined(__cplusplus)
++#error Compile networkframeworkbridge.c as C, not Objective-C or C++
++#endif
++#ifndef __BLOCKS__
++#error Compile networkframeworkbridge.c with -fblocks
++#endif
++#define OS_OBJECT_USE_OBJC 0
++#include "networkframeworkbridge.h"
++#include <Network/Network.h>
++#include <Security/SecProtocolOptions.h>
++#include <dispatch/dispatch.h>
++#include <Block.h>
++#include <dlfcn.h>
++#include <errno.h>
++#include <mach/mach_time.h>
++#include <pthread.h>
++#include <stdbool.h>
++#include <stddef.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++
++/* Blocks are generated by clang before a framework entry point is called.
++ * Weak references permit loading on an older deployment target; capability
++ * initialization checks them before constructing even a stack/global block.
++ * C blocks here capture only ordinary C pointers/scalars (no __block objects).
++ */
++extern void *_NSConcreteStackBlock[] __attribute__((weak_import));
++extern void *_NSConcreteGlobalBlock[] __attribute__((weak_import));
++extern __typeof__(_Block_copy) _Block_copy __attribute__((weak_import));
++extern __typeof__(_Block_release) _Block_release __attribute__((weak_import));
++
++/* Every pointer type comes from the real SDK declaration. No guessed Network,
++ * Security, dispatch or block ABI types. Retain handles for process lifetime:
++ * queued callbacks can still execute after the Pascal owner has closed.
++ */
++#define NW_FUNCTIONS(X) \
++    X(nw_parameters_create_secure_tcp) \
++    X(nw_tls_copy_sec_protocol_options) \
++    X(nw_endpoint_create_host) \
++    X(nw_connection_create) \
++    X(nw_connection_set_queue) \
++    X(nw_connection_set_state_changed_handler) \
++    X(nw_connection_start) \
++    X(nw_connection_cancel) \
++    X(nw_connection_receive) \
++    X(nw_connection_send) \
++    X(nw_content_context_create) \
++    X(nw_content_context_set_is_final) \
++    X(nw_content_context_get_is_final) \
++    X(nw_error_get_error_domain) \
++    X(nw_error_get_error_code) \
++    X(nw_release)
++#define SEC_FUNCTIONS(X) \
++    X(sec_protocol_options_set_tls_server_name) \
++    X(sec_protocol_options_set_peer_authentication_required) \
++    X(sec_protocol_options_set_verify_block) \
++    X(sec_release)
++#define SYSTEM_FUNCTIONS(X) \
++    X(dispatch_queue_create) \
++    X(dispatch_data_create) \
++    X(dispatch_data_create_map) \
++    X(dispatch_release) \
++    X(pthread_cond_timedwait_relative_np)
++#define DECLARE_FUNCTION(name) __typeof__(&name) name;
++struct bridge_api {
++    NW_FUNCTIONS(DECLARE_FUNCTION)
++    SEC_FUNCTIONS(DECLARE_FUNCTION)
++    SYSTEM_FUNCTIONS(DECLARE_FUNCTION)
++    void *network_handle;
++    void *security_handle;
++    mach_timebase_info_data_t timebase;
++    bool available;
++};
++#undef DECLARE_FUNCTION
++static struct bridge_api api;
++static pthread_once_t api_once = PTHREAD_ONCE_INIT;
++
++static void initialize_api(void)
++{
++    if (!_NSConcreteStackBlock || !_NSConcreteGlobalBlock ||
++        !_Block_copy || !_Block_release) return;
++    api.network_handle = dlopen("/System/Library/Frameworks/Network.framework/Network",
++                                RTLD_LOCAL | RTLD_NOW);
++    api.security_handle = dlopen("/System/Library/Frameworks/Security.framework/Security",
++                                 RTLD_LOCAL | RTLD_NOW);
++    if (!api.network_handle || !api.security_handle) return;
++#define LOAD_NETWORK(name) \
++    api.name = (__typeof__(api.name))dlsym(api.network_handle, #name); \
++    if (!api.name) return;
++#define LOAD_SECURITY(name) \
++    api.name = (__typeof__(api.name))dlsym(api.security_handle, #name); \
++    if (!api.name) return;
++#define LOAD_SYSTEM(name) \
++    api.name = (__typeof__(api.name))dlsym(RTLD_DEFAULT, #name); \
++    if (!api.name) return;
++    NW_FUNCTIONS(LOAD_NETWORK)
++    SEC_FUNCTIONS(LOAD_SECURITY)
++    SYSTEM_FUNCTIONS(LOAD_SYSTEM)
++#undef LOAD_NETWORK
++#undef LOAD_SECURITY
++#undef LOAD_SYSTEM
++    if (mach_timebase_info(&api.timebase) != KERN_SUCCESS ||
++        !api.timebase.numer || !api.timebase.denom) return;
++    api.available = true;
++}
++
++#define BUFFER_SIZE 16384u
++#define LOCAL_ERROR_DOMAIN 1
++struct bridge_context {
++    pthread_mutex_t lock;
++    pthread_cond_t changed;
++    unsigned references;                 /* guarded by lock */
++    nw_connection_t connection;
++    dispatch_queue_t queue;
++    bool started;
++    bool ready;
++    bool stopped;
++    bool owner_closed;
++    bool state_reference;                /* one until cancelled callback */
++    bool receive_pending;                /* one receive, at most 16 KiB */
++    bool eof;
++    bool error;
++    int error_domain;
++    int error_code;
++    bool send_pending;
++    bool send_done;
++    size_t offset;
++    size_t length;
++    unsigned char plaintext[BUFFER_SIZE];
++};
++
++struct bridge_deadline {
++    uint64_t start;
++    uint32_t milliseconds;
++    bool infinite;
++};
++
++static void set_outputs(int *domain, int *code, int d, int c)
++{
++    if (domain) *domain = d;
++    if (code) *code = c;
++}
++
++static int context_error_locked(struct bridge_context *ctx, int *domain, int *code)
++{
++    set_outputs(domain, code, ctx->error_domain, ctx->error_code);
++    return -1;
++}
++
++/* The first failure wins; a later cancellation error must not overwrite a TLS
++ * verification error or an I/O deadline. Cancel is asynchronous and nonblocking.
++ * Callers hold lock, preventing a new start/send/receive between stop and cancel.
++ */
++static void fail_locked(struct bridge_context *ctx, int domain, int code)
++{
++    if (!ctx->error) {
++        ctx->error = true;
++        ctx->error_domain = domain;
++        ctx->error_code = code;
++    }
++    if (!ctx->stopped) {
++        ctx->stopped = true;
++        ctx->ready = false;
++        /* Publish cancellation and wake synchronously before asking Network
++         * for its eventual cancellation/completion callbacks. */
++        pthread_cond_broadcast(&ctx->changed);
++        api.nw_connection_cancel(ctx->connection);
++    } else pthread_cond_broadcast(&ctx->changed);
++}
++
++/* Local failures (including close/deadline) stop delivery immediately.
++ * Only a native receive error may be deferred behind its buffered plaintext. */
++static void local_failure_locked(struct bridge_context *ctx, int code)
++{
++    ctx->offset = ctx->length = 0;
++    fail_locked(ctx, LOCAL_ERROR_DOMAIN, code);
++}
++
++static void native_failure_locked(struct bridge_context *ctx, nw_error_t error)
++{
++    if (error)
++        fail_locked(ctx, (int)api.nw_error_get_error_domain(error),
++                    api.nw_error_get_error_code(error));
++    else fail_locked(ctx, LOCAL_ERROR_DOMAIN, EIO);
++}
++
++void fpc_nw_retain(void *value)
++{
++    struct bridge_context *ctx = value;
++    if (!ctx) return;
++    pthread_mutex_lock(&ctx->lock);
++    ++ctx->references;
++    pthread_mutex_unlock(&ctx->lock);
++}
++
++void fpc_nw_release(void *value)
++{
++    struct bridge_context *ctx = value;
++    bool destroy;
++    if (!ctx) return;
++    pthread_mutex_lock(&ctx->lock);
++    destroy = (--ctx->references == 0);
++    pthread_mutex_unlock(&ctx->lock);
++    if (destroy) {
++        /* No owner, operation, state handler or in-flight completion remains. */
++        api.nw_release(ctx->connection);
++        api.dispatch_release(ctx->queue);
++        pthread_cond_destroy(&ctx->changed);
++        pthread_mutex_destroy(&ctx->lock);
++        free(ctx);
++    }
++}
++
++static struct bridge_deadline deadline(uint32_t timeout_ms, bool infinite)
++{
++    struct bridge_deadline result;
++    result.start = mach_absolute_time();
++    result.milliseconds = timeout_ms;
++    result.infinite = infinite;
++    return result;
++}
++
++/* Relative pthread waits use monotonic mach elapsed time, avoiding realtime
++ * clock adjustments. Recompute remaining time after spurious wakes. */
++static int wait_locked(struct bridge_context *ctx, const struct bridge_deadline *limit)
++{
++    uint64_t remaining;
++    long double elapsed;
++    struct timespec relative;
++    int result;
++    if (limit->infinite) return pthread_cond_wait(&ctx->changed, &ctx->lock);
++    elapsed = (long double)(mach_absolute_time() - limit->start) *
++              api.timebase.numer / api.timebase.denom;
++    if (elapsed >= (long double)limit->milliseconds * 1000000.0L)
++        return ETIMEDOUT;
++    remaining = (uint64_t)((long double)limit->milliseconds * 1000000.0L - elapsed);
++    relative.tv_sec = (time_t)(remaining / 1000000000u);
++    relative.tv_nsec = (long)(remaining % 1000000000u);
++    result = api.pthread_cond_timedwait_relative_np(&ctx->changed, &ctx->lock, &relative);
++    /* A relative wait can finish just before the logical deadline. The caller
++     * always checks its predicate again before treating timeout as a failure. */
++    return result;
++}
++
++static bool valid_port(const char *port)
++{
++    unsigned value = 0;
++    unsigned digits = 0;
++    if (!port || !*port) return false;
++    for (; *port; ++port) {
++        if (*port < '0' || *port > '9' || ++digits > 5) return false;
++        value = value * 10u + (unsigned)(*port - '0');
++    }
++    return value > 0 && value <= 65535u;
++}
++
++void *fpc_nw_create(const char *host, const char *port, int verify_peer,
++                    int *domain, int *code)
++{
++    struct bridge_context *ctx;
++    nw_parameters_t parameters;
++    nw_endpoint_t endpoint;
++    int result;
++    set_outputs(domain, code, 0, 0);
++    if (!host || !*host || !valid_port(port)) {
++        set_outputs(domain, code, LOCAL_ERROR_DOMAIN, EINVAL);
++        return NULL;
++    }
++    result = pthread_once(&api_once, initialize_api);
++    if (result || !api.available) {
++        set_outputs(domain, code, LOCAL_ERROR_DOMAIN, result ? result : ENOSYS);
++        return NULL;
++    }
++    ctx = calloc(1, sizeof(*ctx));
++    if (!ctx) {
++        set_outputs(domain, code, LOCAL_ERROR_DOMAIN, ENOMEM);
++        return NULL;
++    }
++    result = pthread_mutex_init(&ctx->lock, NULL);
++    if (result) { free(ctx); set_outputs(domain, code, LOCAL_ERROR_DOMAIN, result); return NULL; }
++    result = pthread_cond_init(&ctx->changed, NULL);
++    if (result) {
++        pthread_mutex_destroy(&ctx->lock);
++        free(ctx);
++        set_outputs(domain, code, LOCAL_ERROR_DOMAIN, result);
++        return NULL;
++    }
++    ctx->references = 1;
++    ctx->queue = api.dispatch_queue_create("org.freepascal.tls.network", NULL);
++    /* create_secure_tcp invokes configuration during construction. Use ctx for
++     * construction status; no stack/error-output pointer enters a saved block.
++     * Verification's saved block captures nothing and calls completion inline. */
++    parameters = ctx->queue ? api.nw_parameters_create_secure_tcp(
++        ^(nw_protocol_options_t tls_options) {
++            sec_protocol_options_t options = api.nw_tls_copy_sec_protocol_options(tls_options);
++            if (!options) { ctx->error = true; return; }
++            api.sec_protocol_options_set_tls_server_name(options, host);
++            api.sec_protocol_options_set_peer_authentication_required(options, true);
++            if (!verify_peer) {
++                api.sec_protocol_options_set_verify_block(options,
++                    ^(sec_protocol_metadata_t metadata, sec_trust_t trust,
++                      sec_protocol_verify_complete_t complete) {
++                        (void)metadata;
++                        (void)trust;
++                        complete(true);
++                    }, ctx->queue);
++            }
++            api.sec_release(options);
++        }, ^(nw_protocol_options_t tcp_options) { (void)tcp_options; }) : NULL;
++    endpoint = parameters && !ctx->error ? api.nw_endpoint_create_host(host, port) : NULL;
++    ctx->connection = endpoint ? api.nw_connection_create(endpoint, parameters) : NULL;
++    if (endpoint) api.nw_release(endpoint);
++    if (parameters) api.nw_release(parameters);
++    if (!ctx->connection) {
++        if (ctx->queue) api.dispatch_release(ctx->queue);
++        pthread_cond_destroy(&ctx->changed);
++        pthread_mutex_destroy(&ctx->lock);
++        free(ctx);
++        set_outputs(domain, code, LOCAL_ERROR_DOMAIN, ENOMEM);
++        return NULL;
++    }
++    api.nw_connection_set_queue(ctx->connection, ctx->queue);
++    /* No state handler/retained context or nw_connection_start before connect. */
++    return ctx;
++}
++
++static void start_locked(struct bridge_context *ctx)
++{
++    ctx->started = true;
++    ctx->state_reference = true;
++    ++ctx->references;
++    api.nw_connection_set_state_changed_handler(ctx->connection,
++        ^(nw_connection_state_t state, nw_error_t error) {
++            bool release_state = false;
++            pthread_mutex_lock(&ctx->lock);
++            if (state == nw_connection_state_ready && !ctx->stopped) ctx->ready = true;
++            else if (state == nw_connection_state_failed ||
++                     (state == nw_connection_state_waiting && error))
++                native_failure_locked(ctx, error);
++            else if (state == nw_connection_state_cancelled) {
++                if (!ctx->stopped) local_failure_locked(ctx, ECANCELED);
++                if (ctx->state_reference) {
++                    ctx->state_reference = false;
++                    release_state = true;
++                }
++                /* Break connection -> state handler -> context retention. No
++                 * future state callback is needed after terminal cancellation. */
++                api.nw_connection_set_state_changed_handler(ctx->connection, NULL);
++            }
++            pthread_cond_broadcast(&ctx->changed);
++            pthread_mutex_unlock(&ctx->lock);
++            if (release_state) fpc_nw_release(ctx);
++        });
++    api.nw_connection_start(ctx->connection);
++}
++
++int fpc_nw_connect(void *value, uint32_t timeout_ms, int *domain, int *code)
++{
++    struct bridge_context *ctx = value;
++    struct bridge_deadline limit;
++    int result = 0;
++    set_outputs(domain, code, 0, 0);
++    if (!ctx) { set_outputs(domain, code, LOCAL_ERROR_DOMAIN, EINVAL); return -1; }
++    limit = deadline(timeout_ms, timeout_ms == 0);
++    pthread_mutex_lock(&ctx->lock);
++    if (ctx->error) result = context_error_locked(ctx, domain, code);
++    else if (ctx->started) {
++        local_failure_locked(ctx, EALREADY);
++        result = context_error_locked(ctx, domain, code);
++    } else {
++        start_locked(ctx);
++        while (!ctx->ready && !ctx->error) {
++            result = wait_locked(ctx, &limit);
++            if (result && !ctx->ready && !ctx->error)
++                local_failure_locked(ctx, result);
++        }
++        result = ctx->error ? context_error_locked(ctx, domain, code) : 1;
++    }
++    pthread_mutex_unlock(&ctx->lock);
++    return result;
++}
++
++/* Caller holds mutex. Only schedule when empty: the completion can copy its
++ * entire result into one bounded buffer without dropping unread plaintext.
++ * Completion owns a context reference until after signaling the caller. */
++static void receive_locked(struct bridge_context *ctx)
++{
++    if (ctx->receive_pending || ctx->length || ctx->eof || ctx->stopped) return;
++    ctx->receive_pending = true;
++    ++ctx->references;
++    api.nw_connection_receive(ctx->connection, 1, BUFFER_SIZE,
++        ^(dispatch_data_t data, nw_content_context_t content_context,
++          bool is_complete, nw_error_t error) {
++            const void *bytes = NULL;
++            size_t size = 0;
++            dispatch_data_t mapped = data ? api.dispatch_data_create_map(data, &bytes, &size) : NULL;
++            pthread_mutex_lock(&ctx->lock);
++            ctx->receive_pending = false;
++            if (!ctx->stopped) {
++                if (data && (!mapped || size > BUFFER_SIZE))
++                    local_failure_locked(ctx, mapped ? EOVERFLOW : ENOMEM);
++                else {
++                    if (size) {
++                        memcpy(ctx->plaintext, bytes, size);
++                        ctx->offset = 0;
++                        ctx->length = size;
++                    }
++                    if (error) native_failure_locked(ctx, error);
++                    else if (is_complete && (!content_context ||
++                             api.nw_content_context_get_is_final(content_context)))
++                        ctx->eof = true;
++                    /* A zero-length non-final completion is not EOF. */
++                }
++            }
++            pthread_cond_broadcast(&ctx->changed);
++            pthread_mutex_unlock(&ctx->lock);
++            if (mapped) api.dispatch_release(mapped);
++            fpc_nw_release(ctx);
++        });
++}
++
++static bool usable_locked(struct bridge_context *ctx)
++{
++    if (ctx->error) return false;
++    if (!ctx->ready) { local_failure_locked(ctx, ENOTCONN); return false; }
++    return true;
++}
++
++int fpc_nw_read(void *value, void *buf, int count, uint32_t timeout_ms,
++                int *domain, int *code)
++{
++    struct bridge_context *ctx = value;
++    struct bridge_deadline limit;
++    int result;
++    set_outputs(domain, code, 0, 0);
++    if (!ctx) { set_outputs(domain, code, LOCAL_ERROR_DOMAIN, EINVAL); return -1; }
++    limit = deadline(timeout_ms, timeout_ms == 0);
++    pthread_mutex_lock(&ctx->lock);
++    if (count < 0 || (count && !buf)) {
++        local_failure_locked(ctx, EINVAL);
++        result = context_error_locked(ctx, domain, code);
++        goto done;
++    }
++    if (count == 0) result = ctx->error ? context_error_locked(ctx, domain, code) : 0;
++    else {
++        for (;;) {
++            /* Return bytes delivered in the same receive as a native error,
++             * before reporting that error on the following call. Close/deadline
++             * discard plaintext, and can never copy into a timed-out buffer. */
++            if (ctx->length) {
++                size_t size = (size_t)count < ctx->length ? (size_t)count : ctx->length;
++                memcpy(buf, ctx->plaintext + ctx->offset, size);
++                ctx->offset += size;
++                ctx->length -= size;
++                if (!ctx->length) ctx->offset = 0;
++                result = (int)size;
++                break;
++            }
++            if (ctx->error) { result = context_error_locked(ctx, domain, code); break; }
++            if (ctx->eof) { result = 0; break; }
++            if (!usable_locked(ctx)) continue;
++            receive_locked(ctx);
++            result = wait_locked(ctx, &limit);
++            if (result && !ctx->length && !ctx->eof && !ctx->error)
++                local_failure_locked(ctx, result);
++        }
++    }
++done:
++    pthread_mutex_unlock(&ctx->lock);
++    return result;
++}
++
++int fpc_nw_can_read(void *value, uint32_t timeout_ms, int *domain, int *code)
++{
++    struct bridge_context *ctx = value;
++    struct bridge_deadline limit;
++    int result;
++    set_outputs(domain, code, 0, 0);
++    if (!ctx) { set_outputs(domain, code, LOCAL_ERROR_DOMAIN, EINVAL); return -1; }
++    limit = deadline(timeout_ms, timeout_ms == UINT32_MAX);
++    pthread_mutex_lock(&ctx->lock);
++    for (;;) {
++        if (ctx->length) { result = 1; break; }
++        if (ctx->error) { result = context_error_locked(ctx, domain, code); break; }
++        if (ctx->eof) { result = 1; break; }
++        if (!usable_locked(ctx)) continue;
++        receive_locked(ctx);
++        if (!timeout_ms) { result = 0; break; }
++        result = wait_locked(ctx, &limit);
++        if (result == ETIMEDOUT && !ctx->length && !ctx->eof && !ctx->error) {
++            result = 0;
++            break;
++        }
++        if (result && result != ETIMEDOUT && !ctx->length && !ctx->eof && !ctx->error)
++            local_failure_locked(ctx, result);
++    }
++    pthread_mutex_unlock(&ctx->lock);
++    return result;
++}
++
++int fpc_nw_write(void *value, const void *buf, int count, uint32_t timeout_ms,
++                 int *domain, int *code)
++{
++    struct bridge_context *ctx = value;
++    struct bridge_deadline limit;
++    unsigned char *copy;
++    dispatch_data_t data;
++    nw_content_context_t content;
++    size_t size;
++    int result;
++    set_outputs(domain, code, 0, 0);
++    if (!ctx) { set_outputs(domain, code, LOCAL_ERROR_DOMAIN, EINVAL); return -1; }
++    limit = deadline(timeout_ms, timeout_ms == 0);
++    pthread_mutex_lock(&ctx->lock);
++    if (count < 0 || (count && !buf)) local_failure_locked(ctx, EINVAL);
++    if (ctx->error) { result = context_error_locked(ctx, domain, code); goto done; }
++    if (!count) { result = 0; goto done; }
++    if (!usable_locked(ctx)) { result = context_error_locked(ctx, domain, code); goto done; }
++    if (ctx->send_pending) {
++        local_failure_locked(ctx, EBUSY);
++        result = context_error_locked(ctx, domain, code);
++        goto done;
++    }
++    size = (size_t)count < BUFFER_SIZE ? (size_t)count : BUFFER_SIZE;
++    copy = malloc(size);
++    if (!copy) {
++        local_failure_locked(ctx, ENOMEM);
++        result = context_error_locked(ctx, domain, code);
++        goto done;
++    }
++    memcpy(copy, buf, size);
++    data = api.dispatch_data_create(copy, size, ctx->queue, ^{ free(copy); });
++    if (!data) {
++        free(copy);
++        local_failure_locked(ctx, ENOMEM);
++        result = context_error_locked(ctx, domain, code);
++        goto done;
++    }
++    /* An ordinary non-final context avoids referencing Network's extern global
++     * default-message block/object constants, and never sends stream EOF. */
++    content = api.nw_content_context_create("org.freepascal.tls.write");
++    if (!content) {
++        api.dispatch_release(data);
++        local_failure_locked(ctx, ENOMEM);
++        result = context_error_locked(ctx, domain, code);
++        goto done;
++    }
++    api.nw_content_context_set_is_final(content, false);
++    ctx->send_done = false;
++    ctx->send_pending = true;
++    ++ctx->references;
++    api.nw_connection_send(ctx->connection, data, content, true,
++        ^(nw_error_t error) {
++            pthread_mutex_lock(&ctx->lock);
++            ctx->send_pending = false;
++            ctx->send_done = true;
++            if (error) native_failure_locked(ctx, error);
++            pthread_cond_broadcast(&ctx->changed);
++            pthread_mutex_unlock(&ctx->lock);
++            fpc_nw_release(ctx);
++        });
++    api.nw_release(content);
++    api.dispatch_release(data);
++    while (!ctx->send_done && !ctx->error) {
++        result = wait_locked(ctx, &limit);
++        if (result && !ctx->send_done && !ctx->error)
++            local_failure_locked(ctx, result);
++    }
++    result = ctx->error ? context_error_locked(ctx, domain, code) : (int)size;
++done:
++    pthread_mutex_unlock(&ctx->lock);
++    return result;
++}
++
++int fpc_nw_bytes_available(void *value)
++{
++    struct bridge_context *ctx = value;
++    int result;
++    if (!ctx) return 0;
++    pthread_mutex_lock(&ctx->lock);
++    result = (int)ctx->length;
++    pthread_mutex_unlock(&ctx->lock);
++    return result;
++}
++
++void fpc_nw_close(void *value)
++{
++    struct bridge_context *ctx = value;
++    bool release_owner = false;
++    if (!ctx) return;
++    pthread_mutex_lock(&ctx->lock);
++    if (!ctx->owner_closed) {
++        ctx->owner_closed = true;
++        local_failure_locked(ctx, ECANCELED);
++        release_owner = true;
++    }
++    pthread_mutex_unlock(&ctx->lock);
++    if (release_owner) fpc_nw_release(ctx);
++}
+diff --git a/packages/fcl-tls/src/macos/networkframeworkbridge.h b/packages/fcl-tls/src/macos/networkframeworkbridge.h
+new file mode 100644
+index 0000000000..fbc5677aa9
+--- /dev/null
++++ b/packages/fcl-tls/src/macos/networkframeworkbridge.h
+@@ -0,0 +1,74 @@
++/* Network.framework client TCP+TLS bridge. Part of FCL; see COPYING.FPC.
++ * PENDING actual Apple SDK build and x86_64/arm64 macOS runtime acceptance.
++ *
++ * Compile as C (not Objective-C) with the host's authorized Apple SDK:
++ *   xcrun clang -std=c11 -fblocks -O2 -Wall -Wextra -Werror \
++ *     -mmacosx-version-min=<existing FPC branch baseline> \
++ *     -c networkframeworkbridge.c -o networkframeworkbridge.o
++ * Link this object with the Pascal program. Do not add -framework Network or
++ * -framework Security: all their required symbols are resolved at runtime.
++ * libSystem supplies pthread, mach timing, dlopen and the weak Blocks runtime.
++ * Keep the existing deployment baseline; ENOSYS means native APIs unavailable.
++ * The object must match the target architecture and be rebuilt when changed.
++ * The C test can link this object without Pascal or framework link flags:
++ *   xcrun clang -std=c11 -Wall -Wextra -Werror testnetworkbridge.c \
++ *     networkframeworkbridge.o -o testnetworkbridge
++ * Run tests with an external deadline and ASan/TSan builds on both architectures.
++ */
++#ifndef FPC_NETWORKFRAMEWORKBRIDGE_H
++#define FPC_NETWORKFRAMEWORKBRIDGE_H
++#include <stdint.h>
++#ifdef __cplusplus
++extern "C" {
++#endif
++
++/* All functions use the C calling convention. Domain/code are cleared on
++ * success. Native errors preserve nw_error_get_error_domain/code; local errors
++ * use POSIX domain 1 and errno values. Error-output pointers may be NULL.
++ *
++ * create owns one reference and constructs exactly one TCP+TLS nw_connection.
++ * It does not start the connection. host is the logical TLS verification name;
++ * port is a decimal string in [1,65535]. verify_peer=0 accepts the supplied peer
++ * in a per-connection verification block; nonzero uses platform chain+hostname
++ * verification. Neither mode changes system trust or protocol/cipher policy.
++ */
++void *fpc_nw_create(const char *host, const char *port, int verify_peer,
++                    int *domain, int *code);
++/* Hold a reference while capturing a pointer under the Pascal owner lock.
++ * Hold owner/operation reference for every call. Serialize connect/read/write/
++ * can_read in the caller. close may interrupt them from another thread.
++ * retain/release do not transfer the one create/close owner reference.
++ */
++void fpc_nw_retain(void *ctx);
++void fpc_nw_release(void *ctx);
++/* 1 ready; -1 error. Connect exactly once; timeout 0 is unlimited.
++ * A connect/read/write error or deadline is terminal and cancels the connection.
++ */
++int fpc_nw_connect(void *ctx, uint32_t timeout_ms, int *domain, int *code);
++/* bytes >= 0 (0 EOF), or -1 error. Reads/writes may return a partial count.
++ * timeout 0 is unlimited. A write consumes at most 16 KiB per call.
++ * No callback accesses a caller buffer, nor caller error pointers. Buffered
++ * plaintext is returned before a receive error; the next read reports it.
++ * Clean EOF is repeatable; a receive error takes precedence over EOF.
++ */
++int fpc_nw_read(void *ctx, void *buf, int count, uint32_t timeout_ms,
++                int *domain, int *code);
++int fpc_nw_write(void *ctx, const void *buf, int count, uint32_t timeout_ms,
++                 int *domain, int *code);
++/* 1 data/clean EOF ready, 0 benign timeout, -1 terminal error ready.
++ * Unlike I/O, timeout 0 polls and UINT32_MAX waits indefinitely.
++ * A benign readiness timeout neither cancels nor replaces a pending receive.
++ */
++int fpc_nw_can_read(void *ctx, uint32_t timeout_ms, int *domain, int *code);
++/* Buffered plaintext only, from 0 through 16 KiB; does not initiate receive. */
++int fpc_nw_bytes_available(void *ctx);
++/* Call once after detaching the owner pointer. Cancels and immediately wakes
++ * waiters, then releases the owner reference. Other retained references and
++ * pending completions remain valid. NULL is harmless. This is cancellation,
++ * not a claim of TLS close_notify or graceful final-message delivery.
++ */
++void fpc_nw_close(void *ctx);
++#ifdef __cplusplus
++}
++#endif
++#endif
+diff --git a/packages/fcl-tls/src/networkframeworktls.pp b/packages/fcl-tls/src/networkframeworktls.pp
+new file mode 100644
+index 0000000000..0c16314093
+--- /dev/null
++++ b/packages/fcl-tls/src/networkframeworktls.pp
+@@ -0,0 +1,409 @@
++{ Part of FCL; see COPYING.FPC. }
++{$IFNDEF FPC_DOTTEDUNITS}
++unit networkframeworktls;
++{$ENDIF}
++{$mode objfpc}{$H+}
++interface
++{$IFDEF FPC_DOTTEDUNITS}
++uses System.Classes, System.SysUtils;
++{$ELSE}
++uses Classes, SysUtils;
++{$ENDIF}
++type
++  TFPNWCreate = function(Host, Port: PAnsiChar; VerifyPeer: LongInt;
++    out Domain, Code: LongInt): Pointer; cdecl;
++  TFPNWConnect = function(Context: Pointer; Timeout: Cardinal;
++    out Domain, Code: LongInt): LongInt; cdecl;
++  TFPNWRead = function(Context, Buffer: Pointer; Count: LongInt; Timeout: Cardinal;
++    out Domain, Code: LongInt): LongInt; cdecl;
++  TFPNWWrite = function(Context, Buffer: Pointer; Count: LongInt; Timeout: Cardinal;
++    out Domain, Code: LongInt): LongInt; cdecl;
++  TFPNWCanRead = function(Context: Pointer; Timeout: Cardinal;
++    out Domain, Code: LongInt): LongInt; cdecl;
++  TFPNWBytesAvailable = function(Context: Pointer): LongInt; cdecl;
++  TFPNWContextProc = procedure(Context: Pointer); cdecl;
++  TFPNWAPI = record
++    CreateConnection: TFPNWCreate;
++    Connect: TFPNWConnect;
++    Read: TFPNWRead;
++    Write: TFPNWWrite;
++    CanRead: TFPNWCanRead;
++    BytesAvailable: TFPNWBytesAvailable;
++    Close, Retain, Release: TFPNWContextProc;
++  end;
++  ENetworkFrameworkTLS = class(EStreamError)
++  private
++    FDomain, FCode: LongInt;
++  public
++    constructor CreateNative(const Operation: String; Domain, Code: LongInt);
++    property Domain: LongInt read FDomain;
++    property Code: LongInt read FCode;
++  end;
++  TNetworkFrameworkVerifyEvent = procedure(Sender: TObject; var Allow: Boolean) of object;
++  { Callers serialize Connect/Read/Write/CanRead/BytesAvailable. Close may
++    concurrently cancel one active call. Before Destroy, stop/coordinate callers:
++    no queued or new calls may remain; the one active call is cancelled/drained.
++    Unix programs must load their thread driver (normally cthreads) first. }
++  TNetworkFrameworkTLSStream = class(TStream)
++  private
++    FAPI: TFPNWAPI;
++    FContext: Pointer;
++    FStateLock, FIOLock: TRTLCriticalSection;
++    FLocksInitialized: Boolean;
++    FHost: UTF8String;
++    FPort: AnsiString;
++    FVerifyPeer, FConnected, FPeerClosed, FClosed, FPeerVerified, FConnecting: Boolean;
++    FGeneration: QWord;
++    FConnectTimeout, FIOTimeout: Cardinal;
++    FOnVerifyConnection: TNetworkFrameworkVerifyEvent;
++    function AcquireContext: Pointer;
++    procedure DropContext(Context: Pointer; PeerEOF: Boolean = False);
++    procedure Fail(Context: Pointer; const Operation: String; Domain, Code: LongInt);
++    procedure CheckCurrent(Context: Pointer);
++  protected
++    { Provider seam permits ABI/state tests without claiming Apple runtime evidence. }
++    constructor CreateWithAPI(const Host: String; Port: Word; VerifyPeer: Boolean;
++      const API: TFPNWAPI);
++  public
++    constructor Create(const Host: String; Port: Word; VerifyPeer: Boolean = False);
++    destructor Destroy; override;
++    procedure Connect;
++    procedure Close;
++    function Read(var Buffer; Count: LongInt): LongInt; override;
++    function Write(const Buffer; Count: LongInt): LongInt; override;
++    function Seek(const Offset: Int64; Origin: TSeekOrigin): Int64; override;
++    function CanRead(Timeout: Integer): Boolean;
++    function BytesAvailable: Integer;
++    property ConnectTimeout: Cardinal read FConnectTimeout write FConnectTimeout;
++    property IOTimeout: Cardinal read FIOTimeout write FIOTimeout;
++    property VerifyPeerCert: Boolean read FVerifyPeer;
++    property Connected: Boolean read FConnected;
++    property Closed: Boolean read FClosed;
++    property PeerClosed: Boolean read FPeerClosed;
++    property PeerVerified: Boolean read FPeerVerified;
++    { Stream-local post-handshake veto. Existing HTTP/socket callbacks are not changed. }
++    property OnVerifyConnection: TNetworkFrameworkVerifyEvent read FOnVerifyConnection write FOnVerifyConnection;
++  end;
++implementation
++{$if defined(Darwin) and defined(FPC_NETWORK_FRAMEWORK_BRIDGE)}
++{$link networkframeworkbridge.o}
++function fpc_nw_create(Host, Port: PAnsiChar; VerifyPeer: LongInt;
++  out Domain, Code: LongInt): Pointer; cdecl; external;
++function fpc_nw_connect(Context: Pointer; Timeout: Cardinal;
++  out Domain, Code: LongInt): LongInt; cdecl; external;
++function fpc_nw_read(Context, Buffer: Pointer; Count: LongInt; Timeout: Cardinal;
++  out Domain, Code: LongInt): LongInt; cdecl; external;
++function fpc_nw_write(Context, Buffer: Pointer; Count: LongInt; Timeout: Cardinal;
++  out Domain, Code: LongInt): LongInt; cdecl; external;
++function fpc_nw_can_read(Context: Pointer; Timeout: Cardinal;
++  out Domain, Code: LongInt): LongInt; cdecl; external;
++function fpc_nw_bytes_available(Context: Pointer): LongInt; cdecl; external;
++procedure fpc_nw_close(Context: Pointer); cdecl; external;
++procedure fpc_nw_retain(Context: Pointer); cdecl; external;
++procedure fpc_nw_release(Context: Pointer); cdecl; external;
++{$endif}
++
++function NativeAPI: TFPNWAPI;
++begin
++{$if defined(Darwin) and defined(FPC_NETWORK_FRAMEWORK_BRIDGE)}
++  Result.CreateConnection:=@fpc_nw_create;
++  Result.Connect:=@fpc_nw_connect;
++  Result.Read:=@fpc_nw_read;
++  Result.Write:=@fpc_nw_write;
++  Result.CanRead:=@fpc_nw_can_read;
++  Result.BytesAvailable:=@fpc_nw_bytes_available;
++  Result.Close:=@fpc_nw_close;
++  Result.Retain:=@fpc_nw_retain;
++  Result.Release:=@fpc_nw_release;
++{$else}
++  raise ENetworkFrameworkTLS.Create('Network.framework requires a Darwin build with the statically linked native bridge');
++{$endif}
++end;
++
++constructor ENetworkFrameworkTLS.CreateNative(const Operation: String; Domain, Code: LongInt);
++begin
++  FDomain:=Domain; FCode:=Code;
++  inherited CreateFmt('Network.framework %s failed (domain %d, code %d)',[Operation,Domain,Code]);
++end;
++
++constructor TNetworkFrameworkTLSStream.CreateWithAPI(const Host: String; Port: Word;
++  VerifyPeer: Boolean; const API: TFPNWAPI);
++begin
++  inherited Create;
++  InitCriticalSection(FStateLock);
++  InitCriticalSection(FIOLock);
++  FLocksInitialized:=True;
++  FClosed:=True;
++  if (Host='') or (Pos(#0,Host)<>0) or (Port=0) then
++    raise ENetworkFrameworkTLS.Create('A nonempty hostname and nonzero port are required');
++  if not (Assigned(API.CreateConnection) and Assigned(API.Connect) and Assigned(API.Read)
++    and Assigned(API.Write) and Assigned(API.CanRead) and Assigned(API.BytesAvailable)
++    and Assigned(API.Close) and Assigned(API.Retain) and Assigned(API.Release)) then
++    raise ENetworkFrameworkTLS.Create('Incomplete Network.framework bridge API');
++  FAPI:=API;
++  FVerifyPeer:=VerifyPeer;
++  FHost:=UTF8Encode(UnicodeString(Host));
++  FPort:=IntToStr(Port);
++end;
++
++constructor TNetworkFrameworkTLSStream.Create(const Host: String; Port: Word; VerifyPeer: Boolean);
++begin
++  CreateWithAPI(Host,Port,VerifyPeer,NativeAPI);
++end;
++
++destructor TNetworkFrameworkTLSStream.Destroy;
++begin
++  if FLocksInitialized then
++    begin
++    Close;
++    { No new calls may begin after destruction starts. Drain a cancelled
++      operation before its finally block touches Self or either lock. }
++    EnterCriticalSection(FIOLock);
++    LeaveCriticalSection(FIOLock);
++    DoneCriticalSection(FIOLock);
++    DoneCriticalSection(FStateLock);
++    end;
++  inherited Destroy;
++end;
++
++function TNetworkFrameworkTLSStream.AcquireContext: Pointer;
++begin
++  EnterCriticalSection(FStateLock);
++  try
++    if not FConnected or (FContext=Nil) then
++      raise ENetworkFrameworkTLS.Create('TLS connection is not open');
++    Result:=FContext;
++    { Close can detach/cancel while the synchronous operation waits. }
++    FAPI.Retain(Result);
++  finally
++    LeaveCriticalSection(FStateLock);
++  end;
++end;
++
++procedure TNetworkFrameworkTLSStream.DropContext(Context: Pointer; PeerEOF: Boolean);
++var ReleaseOwner: Boolean;
++begin
++  EnterCriticalSection(FStateLock);
++  try
++    ReleaseOwner:=(Context<>Nil) and (FContext=Context);
++    if ReleaseOwner then
++      begin
++      FContext:=Nil;
++      FConnected:=False;
++      FClosed:=True;
++      FPeerClosed:=PeerEOF;
++      FPeerVerified:=False;
++      Inc(FGeneration);
++      end;
++  finally
++    LeaveCriticalSection(FStateLock);
++  end;
++  if ReleaseOwner then FAPI.Close(Context);
++end;
++
++procedure TNetworkFrameworkTLSStream.Fail(Context: Pointer; const Operation: String; Domain, Code: LongInt);
++begin
++  DropContext(Context);
++  raise ENetworkFrameworkTLS.CreateNative(Operation,Domain,Code);
++end;
++
++procedure TNetworkFrameworkTLSStream.CheckCurrent(Context: Pointer);
++begin
++  EnterCriticalSection(FStateLock);
++  try
++    if FContext<>Context then
++      raise ENetworkFrameworkTLS.Create('TLS connection was closed during the operation');
++  finally
++    LeaveCriticalSection(FStateLock);
++  end;
++end;
++
++procedure TNetworkFrameworkTLSStream.Connect;
++var Context: Pointer; Generation: QWord; Domain, Code, Status: LongInt;
++    Allow, Started: Boolean;
++begin
++  Started:=False;
++  EnterCriticalSection(FIOLock);
++  try
++    EnterCriticalSection(FStateLock);
++    try
++      if FConnecting then
++        raise ENetworkFrameworkTLS.Create('Reentrant TLS connect is not supported');
++      if FConnected then Exit;
++      if FContext<>Nil then
++        raise ENetworkFrameworkTLS.Create('TLS connection is already being established');
++      FConnecting:=True;
++      Started:=True;
++      Generation:=FGeneration;
++    finally
++      LeaveCriticalSection(FStateLock);
++    end;
++    Context:=FAPI.CreateConnection(PAnsiChar(FHost),PAnsiChar(FPort),Ord(FVerifyPeer),Domain,Code);
++    if Context=Nil then
++      raise ENetworkFrameworkTLS.CreateNative('create',Domain,Code);
++    EnterCriticalSection(FStateLock);
++    try
++      Allow:=Generation=FGeneration;
++      if Allow then
++        begin
++        FContext:=Context;
++        FClosed:=False;
++        FPeerClosed:=False;
++        FAPI.Retain(Context);
++        end;
++    finally
++      LeaveCriticalSection(FStateLock);
++    end;
++    if not Allow then
++      begin
++      FAPI.Close(Context);
++      raise ENetworkFrameworkTLS.Create('TLS connection was closed during creation');
++      end;
++    try
++      try
++        Status:=FAPI.Connect(Context,FConnectTimeout,Domain,Code);
++        if Status<>1 then Fail(Context,'connect',Domain,Code);
++        CheckCurrent(Context);
++        { Built-in trust failure never reaches this post-handshake veto. }
++        Allow:=True;
++        if Assigned(FOnVerifyConnection) then FOnVerifyConnection(Self,Allow);
++        if not Allow then Fail(Context,'application certificate veto',0,0);
++        EnterCriticalSection(FStateLock);
++        try
++          if FContext<>Context then
++            raise ENetworkFrameworkTLS.Create('TLS connection was closed by verification callback');
++          FConnected:=True;
++          FPeerVerified:=FVerifyPeer;
++        finally
++          LeaveCriticalSection(FStateLock);
++        end;
++      except
++        DropContext(Context);
++        Raise;
++      end;
++    finally
++      FAPI.Release(Context);
++    end;
++  finally
++    if Started then
++      begin
++      EnterCriticalSection(FStateLock);
++      try FConnecting:=False finally LeaveCriticalSection(FStateLock) end;
++      end;
++    LeaveCriticalSection(FIOLock);
++  end;
++end;
++
++procedure TNetworkFrameworkTLSStream.Close;
++var Context: Pointer;
++begin
++  if not FLocksInitialized then Exit;
++  { Do not take FIOLock: cancellation must wake a blocked Connect/Read/Write. }
++  EnterCriticalSection(FStateLock);
++  try
++    Context:=FContext;
++    FContext:=Nil;
++    FConnected:=False;
++    FClosed:=True;
++    FPeerClosed:=False;
++    FPeerVerified:=False;
++    Inc(FGeneration);
++  finally
++    LeaveCriticalSection(FStateLock);
++  end;
++  if Context<>Nil then FAPI.Close(Context);
++end;
++
++function TNetworkFrameworkTLSStream.Read(var Buffer; Count: LongInt): LongInt;
++var Context: Pointer; Domain, Code: LongInt;
++begin
++  if Count<0 then raise EStreamError.Create('Negative TLS read count');
++  if Count=0 then Exit(0);
++  EnterCriticalSection(FIOLock);
++  try
++    EnterCriticalSection(FStateLock);
++    try if FPeerClosed then Exit(0) finally LeaveCriticalSection(FStateLock) end;
++    Context:=AcquireContext;
++    try
++      Result:=FAPI.Read(Context,@Buffer,Count,FIOTimeout,Domain,Code);
++      if Result<0 then Fail(Context,'read',Domain,Code);
++      CheckCurrent(Context);
++      if Result>Count then Fail(Context,'invalid read result',0,0);
++      if Result=0 then DropContext(Context,True);
++    finally
++      FAPI.Release(Context);
++    end;
++  finally
++    LeaveCriticalSection(FIOLock);
++  end;
++end;
++
++function TNetworkFrameworkTLSStream.Write(const Buffer; Count: LongInt): LongInt;
++var Context: Pointer; Domain, Code: LongInt;
++begin
++  if Count<0 then raise EStreamError.Create('Negative TLS write count');
++  if Count=0 then Exit(0);
++  EnterCriticalSection(FIOLock);
++  try
++    Context:=AcquireContext;
++    try
++      Result:=FAPI.Write(Context,@Buffer,Count,FIOTimeout,Domain,Code);
++      if Result<0 then Fail(Context,'write',Domain,Code);
++      CheckCurrent(Context);
++      if (Result=0) or (Result>Count) then Fail(Context,'invalid write result',0,0);
++    finally
++      FAPI.Release(Context);
++    end;
++  finally
++    LeaveCriticalSection(FIOLock);
++  end;
++end;
++
++function TNetworkFrameworkTLSStream.Seek(const Offset: Int64; Origin: TSeekOrigin): Int64;
++begin
++  raise EStreamError.Create('TLS streams do not support seeking');
++end;
++
++function TNetworkFrameworkTLSStream.CanRead(Timeout: Integer): Boolean;
++var Context: Pointer; Domain, Code, Status: LongInt; NativeTimeout: Cardinal;
++begin
++  if Timeout<0 then NativeTimeout:=High(Cardinal) else NativeTimeout:=Cardinal(Timeout);
++  EnterCriticalSection(FIOLock);
++  try
++    EnterCriticalSection(FStateLock);
++    try if FPeerClosed then Exit(True) finally LeaveCriticalSection(FStateLock) end;
++    Context:=AcquireContext;
++    try
++      Status:=FAPI.CanRead(Context,NativeTimeout,Domain,Code);
++      if Status<0 then Fail(Context,'readiness',Domain,Code);
++      CheckCurrent(Context);
++      if Status>1 then Fail(Context,'invalid readiness result',0,0);
++      Result:=Status=1;
++    finally
++      FAPI.Release(Context);
++    end;
++  finally
++    LeaveCriticalSection(FIOLock);
++  end;
++end;
++
++function TNetworkFrameworkTLSStream.BytesAvailable: Integer;
++var Context: Pointer;
++begin
++  EnterCriticalSection(FIOLock);
++  try
++    EnterCriticalSection(FStateLock);
++    try if not FConnected then Exit(0) finally LeaveCriticalSection(FStateLock) end;
++    Context:=AcquireContext;
++    try
++      Result:=FAPI.BytesAvailable(Context);
++      CheckCurrent(Context);
++      if Result<0 then Fail(Context,'invalid availability result',0,0);
++    finally
++      FAPI.Release(Context);
++    end;
++  finally
++    LeaveCriticalSection(FIOLock);
++  end;
++end;
++end.
 diff --git a/packages/fcl-tls/src/smartsslsockets.pp b/packages/fcl-tls/src/smartsslsockets.pp
 new file mode 100644
 index 0000000000..868bfb4169
@@ -2157,12 +3363,222 @@ index 0000000000..8117f72ea2
 +    puts("NOT RUN Pascal backend, HTTPS, trust/hostname, cancellation or callback-lifetime tests");
 +    return 0;
 +}
+diff --git a/packages/fcl-tls/tests/macos/testnetworkbridge.c b/packages/fcl-tls/tests/macos/testnetworkbridge.c
+new file mode 100644
+index 0000000000..6f61aff686
+--- /dev/null
++++ b/packages/fcl-tls/tests/macos/testnetworkbridge.c
+@@ -0,0 +1,204 @@
++/* Integration checks for the real macOS C bridge, not a simulated Network API.
++ * Part of FCL; see COPYING.FPC.
++ * PENDING: build and run with an Apple SDK on x86_64 and arm64 macOS.
++ *
++ * Build with the source/header paths described in networkframeworkbridge.h.
++ * No arguments: construction/argument/owner checks (no connection starts).
++ * host port verify ready: successful connect.
++ * host port verify error expected-domain expected-code: exact failure; transport
++ * errors must never satisfy a certificate-verification assertion.
++ * host port verify echo: TLS echo fixture; transfers fragmented 1 MiB then
++ *                       checks an idle readiness timeout leaves it usable.
++ * host port verify timeout: TLS fixture that sends no application data.
++ * host port verify close: TLS fixture that sends no application data; close
++ *                        must interrupt an unlimited read on another thread.
++ * host port verify eof: fixture sends literal 'abc' and cleanly finishes TLS.
++ * host port verify reset: fixture aborts TCP; must not report clean EOF.
++ * Fixture provisioning, certificates/trust and server connection counts are
++ * owned by the macOS test runner; this program never changes system trust.
++ */
++#include "../../src/macos/networkframeworkbridge.h"
++#include <assert.h>
++#include <errno.h>
++#include <pthread.h>
++#include <stdint.h>
++#include <stdio.h>
++#include <stdlib.h>
++#include <string.h>
++#include <time.h>
++
++static void failure(const char *what, int domain, int code)
++{
++    fprintf(stderr, "FAIL %s (domain=%d code=%d)\n", what, domain, code);
++    exit(1);
++}
++/* Evaluate the operation before its diagnostic error arguments. */
++#define check(value, what, domain, code) \
++    do { if (!(value)) failure((what), (domain), (code)); } while (0)
++
++struct reader {
++    void *ctx;
++    pthread_mutex_t lock;
++    pthread_cond_t changed;
++    int entered;
++    int result;
++    int domain;
++    int code;
++};
++
++static void *blocking_reader(void *value)
++{
++    struct reader *r = value;
++    char byte;
++    pthread_mutex_lock(&r->lock);
++    r->entered = 1;
++    pthread_cond_signal(&r->changed);
++    pthread_mutex_unlock(&r->lock);
++    r->result = fpc_nw_read(r->ctx, &byte, 1, 0, &r->domain, &r->code);
++    fpc_nw_release(r->ctx);
++    return NULL;
++}
++
++static void construction(void)
++{
++    int d = 0, e = 0;
++    void *ctx;
++    check(!fpc_nw_create(NULL, "443", 1, &d, &e) && d == 1 && e == EINVAL,
++          "null hostname rejected", d, e);
++    check(!fpc_nw_create("localhost", "0", 1, &d, &e) && d == 1 && e == EINVAL,
++          "invalid port rejected", d, e);
++    for (int verify = 0; verify != 2; ++verify) {
++        ctx = fpc_nw_create("localhost", "443", verify, &d, &e);
++        if (!ctx && d == 1 && e == ENOSYS) {
++            puts("SKIP system does not provide required native APIs");
++            exit(77);
++        }
++        check(ctx != NULL, "construction", d, e);
++        check(fpc_nw_bytes_available(ctx) == 0, "no premature plaintext", 0, 0);
++        fpc_nw_retain(ctx);
++        fpc_nw_close(ctx);
++        check(fpc_nw_connect(ctx, 1, &d, &e) == -1 && d == 1 && e == ECANCELED,
++              "closed unstarted context remains valid under a hold", d, e);
++        fpc_nw_release(ctx);
++    }
++    puts("PASS construction/validation/retained close; no connection started");
++}
++
++static void echo_check(void *ctx)
++{
++    unsigned char sent[137], received[53];
++    size_t offset = 0;
++    int d = 0, e = 0;
++    /* Each small write is consumed before the next, exercising fragmentation
++     * without depending on the fixture's buffering policy. */
++    while (offset < 1024u * 1024u) {
++        size_t size = sizeof(sent), consumed = 0, returned = 0;
++        if (size > 1024u * 1024u - offset) size = 1024u * 1024u - offset;
++        for (size_t i = 0; i < size; ++i) sent[i] = (unsigned char)((offset + i) % 251u);
++        while (consumed < size) {
++            int n = fpc_nw_write(ctx, sent + consumed, (int)(size - consumed), 5000, &d, &e);
++            check(n > 0, "fragmented write", d, e);
++            consumed += (size_t)n;
++        }
++        while (returned < size) {
++            int n = fpc_nw_read(ctx, received, (int)(size - returned < sizeof(received) ?
++                                size - returned : sizeof(received)), 5000, &d, &e);
++            check(n > 0, "fragmented read", d, e);
++            check(memcmp(received, sent + returned, (size_t)n) == 0, "echo contents", d, e);
++            returned += (size_t)n;
++        }
++        offset += size;
++    }
++    check(fpc_nw_can_read(ctx, 1, &d, &e) == 0 && d == 0 && e == 0,
++          "readiness timeout is benign", d, e);
++    check(fpc_nw_write(ctx, "xyz", 3, 5000, &d, &e) == 3,
++          "write remains usable after readiness timeout", d, e);
++    for (int offset = 0; offset < 3;) {
++        int n = fpc_nw_read(ctx, received, 3 - offset, 5000, &d, &e);
++        check(n > 0 && memcmp(received, "xyz" + offset, (size_t)n) == 0,
++              "pending receive survives readiness timeout", d, e);
++        offset += n;
++    }
++    puts("PASS 1 MiB fragmented echo and readiness timeout reuse");
++}
++
++int main(int argc, char **argv)
++{
++    int d = 0, e = 0, result;
++    void *ctx;
++    if (argc == 1) { construction(); return 0; }
++    if ((argc != 5 && argc != 7) ||
++        (argc == 7 && strcmp(argv[4], "error") != 0) ||
++        (argc == 5 && strcmp(argv[4], "error") == 0)) {
++        fprintf(stderr, "usage: %s [host port verify ready|echo|timeout|close|eof|reset] or host port verify error expected-domain expected-code\n", argv[0]);
++        return 2;
++    }
++    ctx = fpc_nw_create(argv[1], argv[2], atoi(argv[3]) != 0, &d, &e);
++    check(ctx != NULL, "create", d, e);
++    result = fpc_nw_connect(ctx, 5000, &d, &e);
++    if (strcmp(argv[4], "error") == 0) {
++        char *end_domain, *end_code;
++        long expected_domain = strtol(argv[5], &end_domain, 10);
++        long expected_code = strtol(argv[6], &end_code, 10);
++        check(*argv[5] && *argv[6] && !*end_domain && !*end_code &&
++              expected_domain != 0 && expected_code != 0,
++              "valid expected error domain/code required", d, e);
++        check(result == -1 && d == expected_domain && e == expected_code,
++              "exact expected connection failure", d, e);
++        fpc_nw_close(ctx);
++        puts("PASS exact expected terminal connection failure; classification comes from fixture expectation");
++        return 0;
++    }
++    check(result == 1, "connect ready", d, e);
++    if (strcmp(argv[4], "echo") == 0) echo_check(ctx);
++    else if (strcmp(argv[4], "timeout") == 0) {
++        char byte = 'q';
++        check(fpc_nw_read(ctx, &byte, 1, 10, &d, &e) == -1 && d == 1 && e == ETIMEDOUT,
++              "read deadline is terminal", d, e);
++        check(byte == 'q', "late receive cannot modify caller buffer", d, e);
++        check(fpc_nw_read(ctx, &byte, 1, 10, &d, &e) == -1 && d == 1 && e == ETIMEDOUT,
++              "read deadline persists", d, e);
++        puts("PASS terminal read deadline");
++    } else if (strcmp(argv[4], "close") == 0) {
++        struct reader r = {0};
++        pthread_t thread;
++        r.ctx = ctx;
++        check(!pthread_mutex_init(&r.lock, NULL), "reader lock", 0, 0);
++        check(!pthread_cond_init(&r.changed, NULL), "reader condition", 0, 0);
++        fpc_nw_retain(ctx);
++        check(!pthread_create(&thread, NULL, blocking_reader, &r), "reader thread", 0, 0);
++        pthread_mutex_lock(&r.lock);
++        while (!r.entered) pthread_cond_wait(&r.changed, &r.lock);
++        pthread_mutex_unlock(&r.lock);
++        fpc_nw_close(ctx);
++        ctx = NULL;
++        check(!pthread_join(thread, NULL), "reader joined after close", 0, 0);
++        check(r.result == -1 && r.domain == 1 && r.code == ECANCELED,
++              "close interrupts read with operation hold", r.domain, r.code);
++        pthread_cond_destroy(&r.changed);
++        pthread_mutex_destroy(&r.lock);
++        puts("PASS close interrupts unlimited read with retained caller");
++    } else if (strcmp(argv[4], "eof") == 0 || strcmp(argv[4], "reset") == 0) {
++        char bytes[3], extra;
++        int count = 0;
++        if (strcmp(argv[4], "eof") == 0) {
++            while (count < 3) {
++                int n = fpc_nw_read(ctx, bytes + count, 3 - count, 5000, &d, &e);
++                check(n > 0, "data preceding EOF", d, e);
++                count += n;
++            }
++            check(!memcmp(bytes, "abc", 3), "EOF fixture contents", 0, 0);
++            check(fpc_nw_read(ctx, &extra, 1, 5000, &d, &e) == 0,
++                  "clean EOF", d, e);
++            check(fpc_nw_read(ctx, &extra, 1, 1, &d, &e) == 0,
++                  "repeated EOF", d, e);
++            puts("PASS data before clean and repeated EOF");
++        } else {
++            check(fpc_nw_read(ctx, &extra, 1, 5000, &d, &e) == -1 && d != 0 && e != 0,
++                  "abort is an error rather than clean EOF", d, e);
++            puts("PASS transport abort rejected as EOF");
++        }
++    } else check(!strcmp(argv[4], "ready"), "known test mode", 0, 0);
++    if (ctx) fpc_nw_close(ctx);
++    return 0;
++}
 diff --git a/packages/fcl-tls/tests/run.ps1 b/packages/fcl-tls/tests/run.ps1
 new file mode 100644
-index 0000000000..0122cd10ab
+index 0000000000..fcb566b677
 --- /dev/null
 +++ b/packages/fcl-tls/tests/run.ps1
-@@ -0,0 +1,95 @@
+@@ -0,0 +1,96 @@
 +param(
 +    [string]$Compiler,
 +    [string]$OutputDirectory = (Join-Path $env:TEMP 'fpc-native-tls-tests'),
@@ -2204,10 +3620,11 @@ index 0000000000..0122cd10ab
 +    foreach ($Relative in @('packages\fcl-net\src\win', 'packages\rtl-extra\src\inc')) {
 +        $BuildOptions += '-Fi' + (Join-Path $SourceRoot $Relative)
 +    }
-+    foreach ($Program in @('testpolicy','testfactory','testsmart','testschannel','testtransport','testbinding','testsmartclient','testopensslpeer','testverifyoptions','tlsstub')) {
++    foreach ($Program in @('testpolicy','testfactory','testsmart','testschannel','testtransport','testbinding','testsmartclient','testopensslpeer','testverifyoptions','testnetworkstream','tlsstub')) {
 +        Run-TestCommand ('compile ' + $Program) $Compiler ($BuildOptions + (Join-Path $PSScriptRoot ($Program + '.pp')))
 +    }
 +    if ($Failures.Count -gt 0) { throw 'Compilation failed; stop before running stale binaries' }
++    Run-TestCommand 'Network.framework Pascal ABI model' (Join-Path $OutputDirectory 'testnetworkstream.exe') @()
 +    Run-TestCommand 'policy' (Join-Path $OutputDirectory 'testpolicy.exe') @()
 +    Run-TestCommand 'factory' (Join-Path $OutputDirectory 'testfactory.exe') @()
 +    Run-TestCommand 'concurrent native factory' (Join-Path $OutputDirectory 'testsmart.exe') @('race')
@@ -2716,6 +4133,270 @@ index 0000000000..6139340633
 +
 +if __name__ == '__main__':
 +    main()
+diff --git a/packages/fcl-tls/tests/testnetworkstream.pp b/packages/fcl-tls/tests/testnetworkstream.pp
+new file mode 100644
+index 0000000000..1b0165f87b
+--- /dev/null
++++ b/packages/fcl-tls/tests/testnetworkstream.pp
+@@ -0,0 +1,258 @@
++{ ABI model tests; do not exercise Network.framework or actual TLS. }
++program testnetworkstream;
++{$mode objfpc}{$H+}
++uses {$ifdef unix}cthreads,{$endif} Classes, SysUtils, networkframeworktls;
++type
++  TMockContext = class
++    References: LongInt;
++    Data, Sent: AnsiString;
++    Position: Integer;
++    Cancel: PRTLEvent;
++    Lock: TRTLCriticalSection;
++    constructor Create;
++    destructor Destroy; override;
++  end;
++  TMockStream = class(TNetworkFrameworkTLSStream)
++    constructor Create(VerifyPeer: Boolean = False);
++  end;
++  TVerifier = class
++    Calls: Integer;
++    Reject, ThrowError, ReenterConnect, CloseStream: Boolean;
++    procedure Verify(Sender: TObject; var Allow: Boolean);
++  end;
++  TReader = class(TThread)
++    Stream: TMockStream;
++    Rejected: Boolean;
++    Operation: Integer;
++    procedure Execute; override;
++  end;
++var
++  API: TFPNWAPI;
++  LiveContexts, Creates, Closes, Retains, Releases, Reads, Writes, Connects: Integer;
++  NativeVerify: LongInt;
++  LastConnectTimeout, LastIOTimeout, LastReadinessTimeout: Cardinal;
++  CreateFailure, ConnectFailure, ReadFailure, WriteFailure, BlockingRead, BlockingWrite, BlockingConnect, BlockingCreate: Boolean;
++  ReadStarted, CreateContinue: PRTLEvent;
++  ReadEntered: LongInt;
++  ReadinessResult: LongInt = 1;
++  LastContext: TMockContext;
++procedure Check(Value: Boolean; const Msg: String);
++begin if not Value then raise Exception.Create(Msg) end;
++constructor TMockContext.Create;
++begin
++  inherited Create; References:=1; Data:='abcdefghij'; Position:=1;
++  InitCriticalSection(Lock); Cancel:=RTLEventCreate; Inc(LiveContexts);
++end;
++destructor TMockContext.Destroy;
++begin RTLEventDestroy(Cancel); DoneCriticalSection(Lock); Dec(LiveContexts); inherited Destroy end;
++procedure MockRetain(Context: Pointer); cdecl;
++begin
++  EnterCriticalSection(TMockContext(Context).Lock);
++  Inc(TMockContext(Context).References); Inc(Retains);
++  LeaveCriticalSection(TMockContext(Context).Lock);
++end;
++procedure MockRelease(Context: Pointer); cdecl;
++var C: TMockContext; Final: Boolean;
++begin
++  C:=TMockContext(Context); EnterCriticalSection(C.Lock);
++  Dec(C.References); Final:=C.References=0; Inc(Releases);
++  LeaveCriticalSection(C.Lock); if Final then C.Free;
++end;
++procedure MockClose(Context: Pointer); cdecl;
++begin Inc(Closes); RTLEventSetEvent(TMockContext(Context).Cancel); MockRelease(Context) end;
++function MockCreate(Host,Port: PAnsiChar; Verify: LongInt; out Domain,Code: LongInt): Pointer; cdecl;
++begin
++  Inc(Creates); NativeVerify:=Verify; Domain:=0; Code:=0;
++  Check((Host='localhost') and (Port='443'),'endpoint preservation');
++  if CreateFailure then begin Domain:=1; Code:=78; Exit(Nil) end;
++  LastContext:=TMockContext.Create; Result:=LastContext;
++  if BlockingCreate then
++    begin InterlockedExchange(ReadEntered,1); RTLEventSetEvent(ReadStarted);
++    RTLEventWaitFor(CreateContinue,5000) end;
++end;
++function MockConnect(Context: Pointer; Timeout: Cardinal; out Domain,Code: LongInt): LongInt; cdecl;
++begin
++  Inc(Connects); LastConnectTimeout:=Timeout; Domain:=0; Code:=0; Result:=1;
++  if BlockingConnect then
++    begin InterlockedExchange(ReadEntered,1); RTLEventSetEvent(ReadStarted);
++    RTLEventWaitFor(TMockContext(Context).Cancel,5000); Domain:=1; Code:=89; Exit(-1) end;
++  if ConnectFailure then begin Result:=-1; Domain:=3; Code:=-9807 end;
++end;
++function MockRead(Context,Buffer: Pointer; Count: LongInt; Timeout: Cardinal; out Domain,Code: LongInt): LongInt; cdecl;
++var C: TMockContext;
++begin
++  Inc(Reads); LastIOTimeout:=Timeout; Domain:=0; Code:=0; C:=TMockContext(Context);
++  if BlockingRead then
++    begin
++    InterlockedExchange(ReadEntered,1); RTLEventSetEvent(ReadStarted);
++    RTLEventWaitFor(C.Cancel,5000); Domain:=1; Code:=89; Exit(-1);
++    end;
++  if ReadFailure then begin Domain:=1; Code:=60; Exit(-1) end;
++  Result:=Length(C.Data)-C.Position+1;
++  if Result>Count then Result:=Count;
++  if Result>3 then Result:=3;
++  if Result>0 then begin Move(C.Data[C.Position],Buffer^,Result); Inc(C.Position,Result) end;
++end;
++function MockWrite(Context,Buffer: Pointer; Count: LongInt; Timeout: Cardinal; out Domain,Code: LongInt): LongInt; cdecl;
++var S: AnsiString;
++begin
++  Inc(Writes); LastIOTimeout:=Timeout; Domain:=0; Code:=0;
++  if BlockingWrite then
++    begin InterlockedExchange(ReadEntered,1); RTLEventSetEvent(ReadStarted);
++    RTLEventWaitFor(TMockContext(Context).Cancel,5000); Domain:=1; Code:=89; Exit(-1) end;
++  if WriteFailure then begin Domain:=1; Code:=60; Exit(-1) end;
++  Result:=Count; if Result>2 then Result:=2;
++  SetString(S,PAnsiChar(Buffer),Result); TMockContext(Context).Sent:=TMockContext(Context).Sent+S;
++end;
++function MockCanRead(Context: Pointer; Timeout: Cardinal; out Domain,Code: LongInt): LongInt; cdecl;
++begin LastReadinessTimeout:=Timeout; Domain:=0; Code:=0; Result:=ReadinessResult end;
++function MockBytes(Context: Pointer): LongInt; cdecl;
++begin Result:=Length(TMockContext(Context).Data)-TMockContext(Context).Position+1 end;
++constructor TMockStream.Create(VerifyPeer: Boolean);
++begin inherited CreateWithAPI('localhost',443,VerifyPeer,API) end;
++procedure TVerifier.Verify(Sender: TObject; var Allow: Boolean);
++begin Inc(Calls); Check(not TMockStream(Sender).PeerVerified,'not committed before veto');
++  if ThrowError then raise Exception.Create('callback exception');
++  if CloseStream then TMockStream(Sender).Close;
++  if ReenterConnect then
++    begin ReenterConnect:=False; TMockStream(Sender).Connect end;
++  Allow:=not Reject;
++end;
++procedure TReader.Execute;
++var Buffer: array[0..3] of Char;
++begin
++  try
++    case Operation of
++      0: Stream.Read(Buffer,SizeOf(Buffer));
++      1: Stream.Write(Buffer,SizeOf(Buffer));
++      2: Stream.Connect;
++    end;
++  except on E:ENetworkFrameworkTLS do Rejected:=True end;
++end;
++procedure ExpectConnectFailure(S: TMockStream; ExpectedDomain, ExpectedCode: LongInt);
++var Failed: Boolean;
++begin
++  Failed:=False;
++  try S.Connect except on E:ENetworkFrameworkTLS do
++    begin Failed:=True; Check((E.Domain=ExpectedDomain) and (E.Code=ExpectedCode),'native error preserved') end end;
++  Check(Failed and not S.Connected and S.Closed,'connect must fail closed');
++end;
++var
++  S: TMockStream; V: TVerifier; Buffer: array[0..15] of Char; Data, Text: AnsiString;
++  N, Before, Cases, Mode: Integer; Failed: Boolean; Reader: TReader; Start: QWord;
++begin
++  API.CreateConnection:=@MockCreate; API.Connect:=@MockConnect; API.Read:=@MockRead;
++  API.Write:=@MockWrite; API.CanRead:=@MockCanRead; API.BytesAvailable:=@MockBytes;
++  API.Close:=@MockClose; API.Retain:=@MockRetain; API.Release:=@MockRelease;
++  Cases:=0; V:=TVerifier.Create;
++  try
++    S:=TMockStream.Create;
++    try
++      Check(not S.VerifyPeerCert and S.Closed,'False default and lazy construction');
++      Check(Creates=0,'construction must not create/start native connection');
++      S.ConnectTimeout:=123; S.IOTimeout:=456; S.OnVerifyConnection:=@V.Verify; S.Connect;
++      Check((NativeVerify=0) and (V.Calls=1) and S.Connected and not S.PeerVerified,'False policy and post-handshake callback');
++      Check(LastConnectTimeout=123,'connect timeout passed');
++      Before:=Connects; S.Connect; Check(Connects=Before,'connect idempotent');
++      Check(S.BytesAvailable=10,'plaintext buffer availability'); Inc(Cases);
++      ReadinessResult:=0; Check(not S.CanRead(7) and S.Connected,'readiness timeout remains connected');
++      Check(LastReadinessTimeout=7,'readiness deadline');
++      Check(not S.CanRead(0) and (LastReadinessTimeout=0),'poll timeout');
++      S.CanRead(-1); Check(LastReadinessTimeout=High(Cardinal),'infinite readiness sentinel');
++      ReadinessResult:=1; Inc(Cases);
++      Text:=''; repeat N:=S.Read(Buffer,SizeOf(Buffer)); if N>0 then begin SetString(Data,PChar(@Buffer[0]),N); Text:=Text+Data end until N=0;
++      Check((Text='abcdefghij') and S.PeerClosed and not S.Connected,'segmented data and clean EOF');
++      Check(S.Read(Buffer,1)=0,'EOF remains EOF'); Check(LastIOTimeout=456,'IO timeout passed'); Inc(Cases);
++      Before:=Closes; S.Close; S.Close; Check(Closes=Before,'repeated close does not release twice'); Inc(Cases);
++    finally S.Free end;
++    S:=TMockStream.Create(True);
++    try
++      V.Calls:=0; S.OnVerifyConnection:=@V.Verify; S.Connect;
++      Check((NativeVerify=1) and S.PeerVerified and (V.Calls=1),'True policy');
++      Data:='partial writes'; S.WriteBuffer(Data[1],Length(Data));
++      Check(LastContext.Sent=Data,'WriteBuffer handles native partial writes');
++      Before:=Reads+Writes; Check((S.Read(Buffer,0)=0) and (S.Write(Buffer,0)=0),'zero IO');
++      Check(Reads+Writes=Before,'zero IO not delegated'); Inc(Cases);
++      Failed:=False; try S.Seek(0,soBeginning) except on E:EStreamError do Failed:=True end;
++      Check(Failed,'nonseekable'); Inc(Cases);
++    finally S.Free end;
++    CreateFailure:=True; S:=TMockStream.Create;
++    try ExpectConnectFailure(S,1,78); Inc(Cases) finally S.Free; CreateFailure:=False end;
++    ConnectFailure:=True; V.Calls:=0; S:=TMockStream.Create(True); S.OnVerifyConnection:=@V.Verify;
++    try ExpectConnectFailure(S,3,-9807); Check(V.Calls=0,'verification failure cannot be overridden'); Inc(Cases)
++    finally S.Free; ConnectFailure:=False end;
++    V.Reject:=True; S:=TMockStream.Create; S.OnVerifyConnection:=@V.Verify;
++    try ExpectConnectFailure(S,0,0); Inc(Cases) finally S.Free; V.Reject:=False end;
++    V.ThrowError:=True; S:=TMockStream.Create; S.OnVerifyConnection:=@V.Verify;
++    try Failed:=False; try S.Connect except on E:Exception do begin Failed:=True; Check(E.Message='callback exception','callback error preservation') end end;
++      Check(Failed and S.Closed,'callback exception closes'); Inc(Cases)
++    finally S.Free; V.ThrowError:=False end;
++    S:=TMockStream.Create; S.Connect; ReadFailure:=True;
++    try Failed:=False; try S.Read(Buffer,1) except on E:ENetworkFrameworkTLS do Failed:=E.Code=60 end;
++      Check(Failed and S.Closed,'read timeout terminal'); Inc(Cases)
++    finally S.Free; ReadFailure:=False end;
++    S:=TMockStream.Create; S.Connect; WriteFailure:=True;
++    try Failed:=False; try S.Write(Buffer,1) except on E:ENetworkFrameworkTLS do Failed:=E.Code=60 end;
++      Check(Failed and S.Closed,'write timeout terminal'); Inc(Cases)
++    finally S.Free; WriteFailure:=False end;
++    BlockingRead:=True; ReadStarted:=RTLEventCreate; ReadEntered:=0; S:=TMockStream.Create; S.Connect;
++    Reader:=TReader.Create(True); Reader.Stream:=S;
++    try
++      Reader.Start; RTLEventWaitFor(ReadStarted,2000); Check(ReadEntered=1,'reader started');
++      Start:=GetTickCount64; S.Close; Reader.WaitFor;
++      Check(Reader.Rejected and (GetTickCount64-Start<2000),'Close cancels outstanding synchronous IO');
++      Check(LiveContexts=0,'pending operation retains context until return'); Inc(Cases);
++    finally Reader.Free; S.Free; RTLEventDestroy(ReadStarted); BlockingRead:=False end;
++
++    for Mode:=1 to 2 do
++      begin
++      ReadStarted:=RTLEventCreate; ReadEntered:=0; S:=TMockStream.Create;
++      if Mode=1 then S.Connect;
++      BlockingWrite:=Mode=1; BlockingConnect:=Mode=2;
++      Reader:=TReader.Create(True); Reader.Stream:=S; Reader.Operation:=Mode;
++      try
++        Reader.Start; RTLEventWaitFor(ReadStarted,2000); Check(ReadEntered=1,'operation started');
++        Start:=GetTickCount64; S.Close; Reader.WaitFor;
++        Check(Reader.Rejected and (GetTickCount64-Start<2000),'Close cancels connect/write');
++        Check(LiveContexts=0,'cancelled operation drops final reference'); Inc(Cases);
++      finally Reader.Free; S.Free; RTLEventDestroy(ReadStarted); BlockingWrite:=False; BlockingConnect:=False end;
++      end;
++    V.ReenterConnect:=True; S:=TMockStream.Create; S.OnVerifyConnection:=@V.Verify; Before:=Creates;
++    try
++      Failed:=False; try S.Connect except on E:ENetworkFrameworkTLS do Failed:=True end;
++      Check(Failed and S.Closed and (Creates=Before+1),'callback reentry cannot create second connection'); Inc(Cases);
++    finally S.Free; V.ReenterConnect:=False end;
++    V.CloseStream:=True; S:=TMockStream.Create; S.OnVerifyConnection:=@V.Verify;
++    try
++      Failed:=False; try S.Connect except on E:ENetworkFrameworkTLS do Failed:=True end;
++      Check(Failed and S.Closed,'callback Close cannot commit ready state'); Inc(Cases);
++    finally S.Free; V.CloseStream:=False end;
++
++    BlockingRead:=True; ReadStarted:=RTLEventCreate; ReadEntered:=0; S:=TMockStream.Create; S.Connect;
++    Reader:=TReader.Create(True); Reader.Stream:=S;
++    try
++      Reader.Start; RTLEventWaitFor(ReadStarted,2000); Check(ReadEntered=1,'destructor reader started');
++      Start:=GetTickCount64; S.Free; S:=Nil; Reader.WaitFor;
++      Check(Reader.Rejected and (GetTickCount64-Start<2000),'destructor drains cancelled IO before destroying locks');
++      Check(LiveContexts=0,'destructor operation reference released'); Inc(Cases);
++    finally Reader.Free; S.Free; RTLEventDestroy(ReadStarted); BlockingRead:=False end;
++    BlockingCreate:=True; ReadStarted:=RTLEventCreate; CreateContinue:=RTLEventCreate;
++    ReadEntered:=0; S:=TMockStream.Create; Before:=Connects;
++    Reader:=TReader.Create(True); Reader.Stream:=S; Reader.Operation:=2;
++    try
++      Reader.Start; RTLEventWaitFor(ReadStarted,2000); Check(ReadEntered=1,'native creation started');
++      S.Close; RTLEventSetEvent(CreateContinue); Reader.WaitFor;
++      Check(Reader.Rejected and S.Closed and (Connects=Before),'creation close generation prevents late connect');
++      Check(LiveContexts=0,'unpublished native owner released'); Inc(Cases);
++    finally Reader.Free; S.Free; RTLEventDestroy(ReadStarted); RTLEventDestroy(CreateContinue); BlockingCreate:=False end;
++
++    V.CloseStream:=True; V.ReenterConnect:=True; S:=TMockStream.Create;
++    S.OnVerifyConnection:=@V.Verify; Before:=Creates;
++    try
++      Failed:=False; try S.Connect except on E:ENetworkFrameworkTLS do Failed:=True end;
++      Check(Failed and S.Closed and (Creates=Before+1),'Close-then-Connect callback cannot create second connection'); Inc(Cases);
++    finally S.Free; V.CloseStream:=False; V.ReenterConnect:=False end;
++    Check((LiveContexts=0) and (Closes=Creates-1),'no leak or double owner release');
++    WriteLn('PASS Pascal Network.framework ABI model cases=',Cases,'; no Apple runtime/TLS evidence');
++  finally V.Free end;
++end.
 diff --git a/packages/fcl-tls/tests/testopensslpeer.pp b/packages/fcl-tls/tests/testopensslpeer.pp
 new file mode 100644
 index 0000000000..e38bb35f3d

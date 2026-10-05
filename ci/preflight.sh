@@ -23,3 +23,14 @@ xcrun --sdk macosx clang -std=c11 -fblocks -Wall -Wextra -Werror \
   "-mmacosx-version-min=$deployment_target" "$probe_source" \
   -framework Network -framework Security -o "$output_dir/networkframework-api"
 "$output_dir/networkframework-api"
+
+# Production bridge API/lifetime construction only; no native TLS connection.
+bridge_source="$source_dir/packages/fcl-tls/src/macos/networkframeworkbridge.c"
+native_harness="$source_dir/packages/fcl-tls/tests/macos/testnetworkbridge.c"
+xcrun --sdk macosx clang -std=c11 -fblocks -Wall -Wextra -Werror \
+  "-mmacosx-version-min=$deployment_target" -c "$bridge_source" \
+  -o "$output_dir/networkframeworkbridge.o"
+xcrun --sdk macosx clang -std=c11 -Wall -Wextra -Werror \
+  "-mmacosx-version-min=$deployment_target" "$native_harness" \
+  "$output_dir/networkframeworkbridge.o" -o "$output_dir/testnetworkbridge"
+"$output_dir/testnetworkbridge"
