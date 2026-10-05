@@ -1,57 +1,48 @@
 # FPC macOS native TLS test carrier
 
-This repository carries only the task patch, exact source baseline and a bounded
-manual CI workflow. All workflows and CI-only orchestration live in this
-repository, outside the FPC patch. It does not mirror FPC history or publish an
-upstream PR.
+This public repository carries the task patch, fixed FPC baseline and manual
+CI orchestration. It does not mirror FPC history or publish an upstream PR.
+No workflow/CI-only script is included in the FPC patch.
 
-The owner's repository is public. First-run conditions: exactly two standard
-GitHub-hosted jobs, `macos-15-intel` (x86_64) and `macos-15` (arm64), each with a
-15-minute timeout. Only `workflow_dispatch` is enabled; no push, PR or schedule
-trigger exists. A concurrency group prevents simultaneous duplicate runs.
-The owner has authorized one first manual dispatch after a successful upload.
-Further runs are not scheduled automatically. No run is requested
-by committing/pushing this payload.
+The current payload is the pure Pascal Network.framework prototype plus Windows
+Schannel, deterministic selector and HTTP connection factory. The C exploration
+is excluded. The real Darwin conditional code has not compiled/linked/run yet.
+Windows package rebuild and complete offline regression pass: HTTP 40, handler
+22, stream 20, shared state model zero leaks, loader/binding/state/deadline checks
+and 87 real local TLS cases. These are not macOS ABI or HTTPS evidence.
 
-The patch SHA256 and FPC base commit are fixed in `payload/manifest.json`. Each
-job downloads one source snapshot at that commit, checks/applies the patch, and
-uses the runner's installed Xcode SDK/clang to build and execute an API/Blocks
-construction probe, and compiles/constructs the production C bridge. No TCP/TLS
-connection is started. No compiler, SDK or package is installed. Existing FPC, if
-present, is inventoried; its absence is explicitly reported.
+Only workflow_dispatch is enabled. There are two standard runners,
+macos-15-intel (x86_64) and macos-15 (arm64), with a proposed 30-minute bound per
+job and fail-fast disabled. No push/PR/schedule trigger, automatic retry, larger
+runner or software installer is configured. Updating this repository does not
+dispatch a run. Additional execution and bootstrap provisioning await approval.
 
-**This stage is not FPC native HTTPS acceptance.** The probe never starts a TCP
-or TLS connection. Trust, hostname verification, stream ownership, cancellation,
-late callbacks and Pascal runtime tests remain future stages. See the applied
-patch's `packages/fcl-tls/docs/macos-transport.md` for the connection seam audit
-and required next tests. A compatible Darwin bootstrap compiler/RTL remains a
-provisioning requirement before an actual FPC build can run.
+ci/preflight.sh consumes an existing native Darwin FPC bootstrap (PATH or
+FPC_BOOTSTRAP_COMPILER, with FPC_BOOTSTRAP_UNITS for a portable extract). Missing
+FPC is explicit NOT RUN and exit 77. It installs/downloads no compiler. After
+building the pinned branch compiler/RTL/packages, it compiles the pure Pascal
+Darwin branch with FPC_NETWORK_FRAMEWORK_NATIVE, runs portable models, native
+selector concurrency and a native construction harness, then records Mach-O
+imports. It starts no native TCP/TLS connection and cannot establish trust,
+hostname, truncation or eventual callback release. No C bridge is built.
 
-Windows validation: package build and complete offline runner exit 0; 87 real
-local TLS cases passed. A bounded native online recheck retains one early TCP
-truncation at expired.badssl.com as failure; it is not certificate rejection.
-No real GnuTLS runtime or macOS runtime claim is made.
+[BOOTSTRAP-PLAN.md](BOOTSTRAP-PLAN.md) describes the official 3.2.2 package,
+temporary-only extraction, exact approval scope and stop conditions. No binary
+has been downloaded or provisioned under that plan. Mac15 compatibility of this
+2021 bootstrap is unproven. A later TLS matrix must observe native context
+release, late send/receive/state completions, DNS/IP trust, EOF/FIN and HTTP
+connection counts before the backend can be offered as default.
 
-The standard macOS labels are documented at
-https://docs.github.com/en/actions/reference/runners/github-hosted-runners
-and are free for public repositories. No larger/paid runner is configured.
+## Earlier authorized run
 
-The standalone Pascal connection layer now passes 20 Windows ABI model cases.
-This is state/ownership evidence only. The first preflight also builds the
-production C object and no-argument native harness; full native TLS fixture
-modes are not started by this workflow. FPC native stream linking and the HTTP
-transport seam remain later stages. SSH access authenticates as ACTom; HTTPS
-token push was denied, without identifying a specific missing token permission.
+[37319310587](https://github.com/ACTom/fpc-macos-ci/actions/runs/37319310587),
+carrier 57c74fec6a0ff35c8cc93ee1a7702b20db793b95, tested the earlier C
+exploration. Patch application, Apple API/Blocks construction and C object
+compilation passed on both macOS15.7.9 architectures with SDK15.5/clang17.
+Overall it failed at the C harness -Wstring-plus-int under -Werror. Neither runner
+had FPC. No second run has been requested. This is historical evidence only;
+it does not verify the new Pascal branch. The public expired.badssl Windows
+truncation failure also remains recorded, not counted as certificate rejection.
 
-## First manual run
-
-[37319310587](https://github.com/ACTom/fpc-macos-ci/actions/runs/37319310587)
-failed on both architectures at the native C test harness compile: clang 17
--Wstring-plus-int rejected a string-literal offset expression under -Werror.
-Payload application, direct Apple API/Blocks construction and production C
-bridge object compilation passed on both architectures with the installed
-macOS 15.5 SDK. The expression has been corrected using a named array; its
-macOS revalidation and bridge runtime remain pending. Neither runner provided
-an existing FPC bootstrap. No new software was installed, and no second run has
-been requested. The first tested carrier commit is 57c74fec6a0ff35c8cc93ee1a7702b20db793b95.
-The source download uses HTTPS; the native construction probes open no connection.
+Updates are pushed through the owner's configured SSH key. Source repository
+origin, account settings and key configuration are not changed.

@@ -6,8 +6,11 @@ assert manifest['base_repository']=='https://gitlab.com/ACTom/source'
 assert re.fullmatch('[0-9a-f]{40}',manifest['base_commit'])
 patch=(root/'payload/native-tls.patch').read_bytes()
 assert hashlib.sha256(patch).hexdigest()==manifest['patch_sha256'], 'Patch digest mismatch'
-assert b'diff --git a/packages/fcl-tls/tests/macos/networkframework-api.c' in patch
-assert b'diff --git a/packages/fcl-tls/ci/' not in patch, 'CI workflow leaked into FPC patch'
-assert b'diff --git a/packages/fcl-tls/tests/macos/preflight.sh' not in patch, 'CI script leaked into FPC patch'
-assert b'diff --git a/.github/workflows/' not in patch, 'GitHub workflow leaked into FPC patch'
-print('PASS immutable payload' , manifest['base_commit'], manifest['patch_sha256'])
+for name in ['networkframeworkapi.pp','networkframeworknative.pp','networkframeworksslsockets.pp']:
+    assert ('diff --git a/packages/fcl-tls/src/'+name).encode() in patch
+for name in ['networkframeworkbridge.c','networkframeworkbridge.h','networkframework-api.c','testnetworkbridge.c']:
+    assert ('diff --git a/packages/fcl-tls/src/macos/'+name).encode() not in patch
+    assert ('diff --git a/packages/fcl-tls/tests/macos/'+name).encode() not in patch
+for path in ['packages/fcl-tls/ci/','packages/fcl-tls/tests/macos/preflight.sh','.github/workflows/']:
+    assert ('diff --git a/'+path).encode() not in patch, 'CI orchestration leaked into FPC patch'
+print('PASS fixed pure Pascal payload',manifest['base_commit'],manifest['patch_sha256'])
