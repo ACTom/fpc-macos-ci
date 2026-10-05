@@ -49,8 +49,10 @@ options=(-n -gl -dFPC_NETWORK_FRAMEWORK_NATIVE -dFPC_NETWORKFRAMEWORK_DIAGNOSTIC
   "-Fu$source_dir/packages/fcl-net/src" "-Fu$source_dir/packages/fcl-tls/src"
   "-Fu$source_dir/packages/fcl-web/src/base" "-Fu$source_dir/packages/fcl-base/src"
   "-Fu$source_dir/packages/rtl-objpas/src/inc" "-Fu$source_dir/packages/rtl-extra/src/unix"
+  "-Fu$source_dir/packages/rtl-extra/src/darwin" "-Fu$source_dir/packages/rtl-extra/src/bsd"
   "-Fu$source_dir/packages/openssl/src" "-Fu$source_dir/packages/gnutls/src"
   "-Fi$source_dir/packages/fcl-net/src/unix" "-Fi$source_dir/packages/rtl-extra/src/inc"
+  "-Fi$source_dir/packages/rtl-extra/src/bsd" "-Fi$source_dir/packages/rtl-extra/src/unix" "-Fi$source_dir/packages/rtl-extra/src/darwin"
   "-FU$output_dir" "-FE$output_dir")
 # The branch's own global/object-method Blocks ABI checks.
 for program in tblock1 tblock2 tblock2a; do
@@ -94,4 +96,6 @@ for program in testpolicy testfactory testnetworkstream testhttpconnection testn
 done
 for program in testpolicy testfactory testnetworkstream testhttpconnection testnetworkhandler; do stage "$program-run" "$output_dir/$program"; done
 stage native-selector-race "$output_dir/testsmart" race
-echo 'PASS pure Pascal build/model/native construction; no native TCP/TLS acceptance or lifetime claim'
+stage native-http-compile "$compiler" "${options[@]}" "$source_dir/packages/fcl-tls/tests/macos/testnetworkhttp.pp"
+stage native-tls-acceptance python3 "$source_dir/packages/fcl-tls/tests/macos/testnetworktls.py" "$output_dir/testnetworknative" "$output_dir/testnetworkhttp" "$output_dir/tls-fixtures"
+echo 'PASS native build/models/TLS acceptance; see per-case results and context counters'

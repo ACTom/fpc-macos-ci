@@ -78,9 +78,10 @@ jobs:
             ${{ runner.temp }}/fpc-official-bootstrap/logs/*.txt
             ${{ runner.temp }}/fpc-macos-preflight/*.log
             ${{ runner.temp }}/fpc-macos-preflight/*.txt
+            ${{ runner.temp }}/fpc-macos-preflight/tls-fixtures/results.json
       - name: Summarize scope
         if: always()
         shell: bash
         run: |
-          printf '%s\n' 'This run requires an existing approved Darwin FPC bootstrap and checks pure Pascal compilation/linking, models and native construction.' \
-            'Official temporary bootstrap is opt-in with owner approval. Native HTTPS/trust/hostname/lifetime acceptance remains separate.' >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' 'Pure Pascal build/link, portable models, native selector and TLS acceptance are separate logged stages.' \
+            'Check each stage and per-case results.json; an unrun stage or connection failure does not prove certificate validation.' >> "$GITHUB_STEP_SUMMARY"
