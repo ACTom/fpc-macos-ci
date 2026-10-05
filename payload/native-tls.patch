@@ -1120,10 +1120,10 @@ index 0000000000..f5823f6312
 +[test carrier](https://github.com/ACTom/fpc-macos-ci). No further CI was started.
 diff --git a/packages/fcl-tls/docs/macos-transport.md b/packages/fcl-tls/docs/macos-transport.md
 new file mode 100644
-index 0000000000..535dc3bf4e
+index 0000000000..00d7b1409b
 --- /dev/null
 +++ b/packages/fcl-tls/docs/macos-transport.md
-@@ -0,0 +1,193 @@
+@@ -0,0 +1,215 @@
 +# Pure Pascal Network.framework client prototype
 +
 +The connection layer, SSL handler and fphttpclient connection factory are now
@@ -1191,7 +1191,13 @@ index 0000000000..535dc3bf4e
 +and already-delivered plaintext precedes a deferred error. On macOS 15.7.9,
 +Network.framework reports a bare TCP FIN without TLS close_notify as error-free
 +EOF, just like clean TLS closure. The strict truncation test remains failed;
-+the native backend does not currently distinguish these closures. CanRead timeout is benign; connect/read/write
++the native backend does not currently distinguish these closures. A zero Read
++means transport EOF, not proof of authenticated TLS close_notify. Protocols with
++an explicit message boundary can check completeness themselves. Close-delimited
++HTTP cannot infer completeness from this EOF. Native HTTP now rejects early EOF
++before Content-Length bytes or the terminal chunk have been received; the
++close-delimited policy remains pending an owner decision. See
++[RFC9112 section9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.8). CanRead timeout is benign; connect/read/write
 +deadlines are terminal. Mach monotonic time drives native deadlines.
 +
 +VerifyPeerCert=True retains system trust and logical hostname validation.
@@ -1205,7 +1211,7 @@ index 0000000000..535dc3bf4e
 +Windows run.ps1 compiles model tests into separate output directories. The
 +shared native-state model uses FPC_NETWORKFRAMEWORK_MODEL; this define compiles
 +shared production state helpers without compiling Darwin cblocks. The 20 stream,
-+40 HTTP and 22 handler checks and the shared callback model pass. The latter
++46 HTTP and 22 handler checks and the shared callback model pass. The latter
 +records 146 allocations/frees and zero unfreed blocks. Windows package rebuild
 +and the complete local 87-case TLS regression pass. These prove neither Apple
 +SDK declarations nor Darwin code generation, trust or runtime behavior.
@@ -1317,6 +1323,22 @@ index 0000000000..535dc3bf4e
 +pending-context release. Strict TCP FIN rejection fails because the native
 +framework returns clean EOF. Final per-architecture acceptance results must be
 +read independently; Windows tests supply no Apple runtime evidence.
++
++Run 37341698834 (carrier17895de7599c1c2f73bb5deab7ff65f605f0e566) passed all
++build/model stages and 50 of52 native TLS acceptance cases independently on
++x86_64 and arm64. Both remaining failures are bare TCP FIN, one per TLS version.
++Wrong hostname, expired, self-signed and untrusted-root public controls reject
++with explicit TLS certificate errors when True and succeed when False. Read,
++send-pressure and handshake deadlines, HTTP keepalive, 1MiB echo, concurrent
++cancellation and context-drain observations pass. These counts are not general
++system leak or sanitizer evidence. SDK15.5 public headers expose receive
++completion/context/error but no matched close_notify status API; a detailed
++native callback and delayed-state observation is prepared for the next run.
++
++The next payload adds HTTP incomplete Content-Length/chunk guards and separate
++FIN/clean-close diagnostics. Diagnostics are labeled separately and never satisfy
++the strict FIN rejection cases. Experimental enablement remains required; no
++architecture replacement or lower closure promise is approved implicitly.
 diff --git a/packages/fcl-tls/docs/openssl-eof.md b/packages/fcl-tls/docs/openssl-eof.md
 new file mode 100644
 index 0000000000..475c795980
@@ -1414,16 +1436,17 @@ index 0000000000..475c795980
 +- [OpenSSL s_client diagnostics](https://docs.openssl.org/3.5/man1/openssl-s_client/)
 diff --git a/packages/fcl-tls/docs/validation.md b/packages/fcl-tls/docs/validation.md
 new file mode 100644
-index 0000000000..8712f7b706
+index 0000000000..cc2e89efe2
 --- /dev/null
 +++ b/packages/fcl-tls/docs/validation.md
-@@ -0,0 +1,282 @@
+@@ -0,0 +1,309 @@
 +# Windows increment validation
 +
 +Recorded on 2026-10-05 against base commit
 +`56900cd3a5` (`Update FileDialog demo.`), branch
 +`feature/native-tls-smart-sockets`. The repository was clean before this work.
-+No reset, commit, push, remote publication or software installation was performed.
++No source reset, commit or push was performed. The separately authorized macOS
++CI carrier is public; its temporary compiler bootstrap is described below.
 +
 +## Environment and build
 +
@@ -1521,12 +1544,12 @@ index 0000000000..8712f7b706
 +  deadlines bound network waits and partial sends; they cannot cancel work
 +  inside the OS trust APIs. One handler has a single owner; simultaneous
 +  operations on the same handler are unsupported.
-+- macOS implementation and runtime validation: not started. The separate
-+  [macOS transport design](macos-transport.md) describes the pre-TCP connection
-+  factory required by Network.framework. Older macOS Secure Transport support
-+  and the architecture choice require a later decision.
-+- No public repository, MR or macOS CI job exists. Publication remains outside
-+  the authorization for this increment.
++- macOS now has a pure Pascal prototype and real dual-architecture validation;
++  strict TCP FIN rejection remains failed and default activation remains gated.
++  See [macOS transport evidence](macos-transport.md). Older systems and an
++  alternative closure strategy still require an architecture decision.
++- No FPC-source publication or MR exists. CI orchestration is separately
++  authorized in ACTom/fpc-macos-ci, with a cumulative20-execution ceiling.
 +
 +## Recorded build and public run outcome
 +
@@ -1632,14 +1655,15 @@ index 0000000000..8712f7b706
 +No real GnuTLS library, OpenSSL1.1.1, Win32/ARM64/older-Windows or Schannel TLS1.3
 +runtime was tested. A separate existing GnuTLS same-handler reconnect/session
 +ownership issue was confirmed unchanged in the base commit; HTTP tests here
-+create fresh handlers. macOS execution remains pending the prepared CI stage.
++create fresh handlers. Current macOS execution evidence is recorded below and in macos-transport.md.
 +
 +## Pure Pascal connection integration
 +
 +The C exploration has been archived locally and removed from the delivered
 +patch. The production prototype now consists solely of Pascal bindings,
 +cblocks, a retained native context, stream, SSL handler and the HTTP connection
-+factory. Its actual Darwin conditional branch has never been compiled or run.
++factory. Subsequent dual-architecture Darwin build/runtime evidence is recorded
++below; the original Windows-only models did not establish it.
 +Runtime activation requires FPC_NETWORK_FRAMEWORK_NATIVE and available APIs.
 +
 +On 2026-10-05, tls-build/pure-pascal-integrated-native/results.log exited 0:
@@ -1667,14 +1691,15 @@ index 0000000000..8712f7b706
 +callback detachment were corrected. The native review confirmed documented C
 +bool widths, method-block captures, copied send data and explicit context holds
 +by static inspection only. Callback Self lifetime is independent of block copy.
-+Darwin SDK/compiler ABI, Mach-O imports/minimum systems, system trust/hostname,
-+late callback release and external-thread RTL remain untested. The current native
-+harness requires stronger release observation before lifetime acceptance.
++At that Windows-only checkpoint, Darwin ABI, imports, trust and callbacks were
++untested. Later Mac runs below provide direct evidence; old systems, sanitizer
++coverage and strict TLS FIN handling remain acceptance gaps.
 +
 +The earlier C-only macOS preflight 37319310587 passed exact patch application,
 +Apple API/Blocks construction and C object compilation on both architectures,
 +then failed its C harness warning. Neither runner had FPC. It does not test the
-+new pure Pascal code. No second manual run or bootstrap provisioning has happened.
++new pure Pascal code. Subsequent approved Pascal/bootstrap runs are recorded
++separately below.
 +All CI scripts/workflows remain outside the FPC source patch in ACTom/fpc-macos-ci.
 +
 +## Official bootstrap preflight outcome
@@ -1700,6 +1725,30 @@ index 0000000000..8712f7b706
 +No native TLS connection occurred. Only the single newly authorized dispatch
 +was made; no automatic or manual retry followed this failure. Text evidence
 +was retained for each architecture. Existing Windows evidence remains unchanged.
++
++## HTTP framing fix and current Darwin acceptance
++
++The earlier new-transport HTTP parser accepted a short Content-Length body
++without an error; http-truncation-red/result.log retains that reproduced failure.
++The new connection path now rejects incomplete Content-Length and chunk framing.
++The existing socket path retains its branch behavior. The green model has46
++checks including truncated framing, complete chunks and handler/transport cleanup.
++packages-http-framing.log records Windows packages build exit0. The complete
++http-framing-integrated suite passes87 local real TLS tests and all model/state
++checks, but exits1 because TemporaryDirectory cleanup could not delete a copied
++exe after all17 loader cases passed. The targeted loader run uses a new optional
++--output fresh directory to retain fixtures for inspection; its result is recorded
++separately without discarding the initial cleanup failure.
++
++Run37341698834 tests carrier17895de on macOS15.7.9/SDK15.5. Each architecture
++passes build/models/native race and50 of52 real TLS cases. Only bare FIN without
++close_notify fails, in TLS1.2 and1.3. Certificate classification and application
++veto assertion corrections are verified. Both True and False public controls,
++1MiB fragmentation, keepalive, read/send/handshake deadlines, concurrent Close and
++context release have actual native evidence. The following run will separately
++verify the HTTP framing fix and native receive/state inputs. CI attempts so far
++are six unique workflow IDs with one attempt each; two jobs count once. No strict
++FIN test is redefined as a passing diagnostic.
 diff --git a/packages/fcl-tls/fpmake.pp b/packages/fcl-tls/fpmake.pp
 new file mode 100644
 index 0000000000..37e9fb5bf9
@@ -2084,10 +2133,10 @@ index 0000000000..92d5553a00
 +end.
 diff --git a/packages/fcl-tls/src/networkframeworknative.pp b/packages/fcl-tls/src/networkframeworknative.pp
 new file mode 100644
-index 0000000000..bcaba3b6a0
+index 0000000000..00db796d69
 --- /dev/null
 +++ b/packages/fcl-tls/src/networkframeworknative.pp
-@@ -0,0 +1,906 @@
+@@ -0,0 +1,931 @@
 +{ Part of FCL; see COPYING.FPC.
 +  Pure Pascal Network.framework client TCP+TLS provider. No C object dependency.
 +  Callback methods belong to an explicitly retained context, never the stream.
@@ -2121,6 +2170,7 @@ index 0000000000..bcaba3b6a0
 +{ Test-only process counters: observe eventual release after native callbacks. }
 +function NetworkFrameworkLiveContexts: LongInt;
 +function NetworkFrameworkDestroyedContexts: LongInt;
++function NetworkFrameworkReceiveDiagnostics: String;
 +{$endif}
 +{$ifdef FPC_NETWORKFRAMEWORK_MODEL}
 +{ Explicit test build only: uses the production context/state helpers while
@@ -2208,10 +2258,22 @@ index 0000000000..bcaba3b6a0
 +{$endif}
 +{$ifdef FPC_NETWORKFRAMEWORK_DIAGNOSTICS}
 +var LiveContexts, DestroyedContexts: LongInt;
++    ReceiveCount, LastComplete, LastContentFinal, LastContentPresent,
++    LastDataPresent, LastErrorPresent, LastErrorDomain, LastErrorCode,
++    LastState, StateEvents: LongInt;
 +function NetworkFrameworkLiveContexts: LongInt;
 +begin Result:=InterlockedCompareExchange(LiveContexts,0,0) end;
 +function NetworkFrameworkDestroyedContexts: LongInt;
 +begin Result:=InterlockedCompareExchange(DestroyedContexts,0,0) end;
++function NetworkFrameworkReceiveDiagnostics: String;
++begin
++  Result:=Format('receive_count=%d complete=%d content_present=%d final=%d data_present=%d error_present=%d domain=%d code=%d state=%d state_events=%d',
++    [InterlockedCompareExchange(ReceiveCount,0,0),InterlockedCompareExchange(LastComplete,0,0),
++     InterlockedCompareExchange(LastContentPresent,0,0),InterlockedCompareExchange(LastContentFinal,0,0),
++     InterlockedCompareExchange(LastDataPresent,0,0),InterlockedCompareExchange(LastErrorPresent,0,0),
++     InterlockedCompareExchange(LastErrorDomain,0,0),InterlockedCompareExchange(LastErrorCode,0,0),
++     InterlockedCompareExchange(LastState,0,0),InterlockedCompareExchange(StateEvents,0,0)]);
++end;
 +{$endif}
 +
 +function NetworkFrameworkAvailabilityError: String;
@@ -2475,6 +2537,9 @@ index 0000000000..bcaba3b6a0
 +var DropState: Boolean;
 +begin
 +  DropState:=False;
++{$ifdef FPC_NETWORKFRAMEWORK_DIAGNOSTICS}
++  InterlockedExchange(LastState,State); InterlockedIncrement(StateEvents);
++{$endif}
 +  try
 +    Lock;
 +    try
@@ -2514,6 +2579,15 @@ index 0000000000..bcaba3b6a0
 +      Domain:=0; Code:=0;
 +      if Error<>nil then
 +        begin Domain:=FFunctions^.ErrorDomain(Error); Code:=FFunctions^.ErrorCode(Error) end;
++{$ifdef FPC_NETWORKFRAMEWORK_DIAGNOSTICS}
++      InterlockedExchange(LastComplete,Ord(IsComplete));
++      InterlockedExchange(LastContentPresent,Ord(Content<>nil));
++      InterlockedExchange(LastContentFinal,Ord(FinalContent));
++      InterlockedExchange(LastDataPresent,Ord(Data<>nil));
++      InterlockedExchange(LastErrorPresent,Ord(Error<>nil));
++      InterlockedExchange(LastErrorDomain,Domain); InterlockedExchange(LastErrorCode,Code);
++      InterlockedIncrement(ReceiveCount);
++{$endif}
 +      Lock;
 +      try ReceiveResultLocked(Buffer,Size,FinalContent,Error<>nil,Domain,Code)
 +      finally Unlock end;
@@ -4161,10 +4235,10 @@ index 0000000000..db0faab039
 +  "$output_dir/testnetworkhttp" "$output_dir/fixtures" 2>&1 | tee "$output_dir/acceptance.log"
 diff --git a/packages/fcl-tls/tests/macos/testnetworkhttp.pp b/packages/fcl-tls/tests/macos/testnetworkhttp.pp
 new file mode 100644
-index 0000000000..cad9c8a620
+index 0000000000..4316df99a1
 --- /dev/null
 +++ b/packages/fcl-tls/tests/macos/testnetworkhttp.pp
-@@ -0,0 +1,103 @@
+@@ -0,0 +1,105 @@
 +{ Real macOS HTTP acceptance harness. Run with the sibling Python fixture.
 +  Requires cthreads first, native provider and diagnostic counters. }
 +program testnetworkhttp;
@@ -4218,7 +4292,7 @@ index 0000000000..cad9c8a620
 +    Require(ParamCount=8,'usage: URL default|true|false callback after_false expected callbacks body_mode requests');
 +    URL:=ParamStr(1); Expected:=ParamStr(5); BodyMode:=ParamStr(7);
 +    Requests:=StrToInt(ParamStr(8)); Require(Requests>0,'positive request count');
-+    Require((Expected='pass') or (Expected='certificate') or (Expected='veto'),'known expectation');
++    Require((Expected='pass') or (Expected='certificate') or (Expected='veto') or (Expected='framing'),'known expectation');
 +    SetSmartTLSBackend(tbNetworkFramework);
 +    Observer:=TObserver.Create; Client:=TNativeHTTPClient.Create(nil);
 +    try
@@ -4251,7 +4325,9 @@ index 0000000000..cad9c8a620
 +      if Expected='pass' then Require(Succeeded,'request must succeed')
 +      else if Expected='certificate' then
 +        Require(not Succeeded and CertificateFailure(Domain,Code),'specific certificate rejection required')
-+      else Require(not Succeeded and (Pos('application certificate veto',LowerCase(Failure))>0),'callback veto required');
++      else if Expected='veto' then
++        Require(not Succeeded and (Pos('application certificate veto',LowerCase(Failure))>0),'callback veto required')
++      else Require(not Succeeded and (Pos('Unexpected end of HTTP response',Failure)>0),'explicit incomplete framing rejection required');
 +      Require(Observer.Calls=StrToInt(ParamStr(6)),'exact callback count');
 +      if (Expected='pass') and (Requests>1) then Require(Observer.CreatedCount=1,'same native TLS connection reused');
 +      Require(GetSmartTLSBackend=tbNetworkFramework,'backend remains fixed');
@@ -4270,10 +4346,10 @@ index 0000000000..cad9c8a620
 +end.
 diff --git a/packages/fcl-tls/tests/macos/testnetworknative.pp b/packages/fcl-tls/tests/macos/testnetworknative.pp
 new file mode 100644
-index 0000000000..7b83011bc5
+index 0000000000..d2ce9fcab5
 --- /dev/null
 +++ b/packages/fcl-tls/tests/macos/testnetworknative.pp
-@@ -0,0 +1,321 @@
+@@ -0,0 +1,341 @@
 +{ Part of FCL; see COPYING.FPC.
 +  Integration harness for the pure Pascal native provider; no C object required.
 +  PENDING: compile/link and run on x86_64 and arm64 macOS with an Apple SDK.
@@ -4508,7 +4584,7 @@ index 0000000000..7b83011bc5
 +    end
 +  else Check((ParamCount=4) and ((Mode='ready') or (Mode='echo') or
 +    (Mode='timeout') or (Mode='close') or (Mode='canclose') or (Mode='eof') or
-+    (Mode='reset') or (Mode='writetimeout') or (Mode='connecttimeout')),'known test mode',0,0);
++    (Mode='reset') or (Mode='writetimeout') or (Mode='connecttimeout') or (Mode='finobserve') or (Mode='eofobserve')),'known test mode',0,0);
 +  Context:=API.CreateConnection(PAnsiChar(Host),PAnsiChar(Port),Verify,Domain,Code);
 +  Check(Context<>nil,'create',Domain,Code);
 +  try
@@ -4545,7 +4621,7 @@ index 0000000000..7b83011bc5
 +        'read deadline remains terminal',Domain,Code);
 +      Writeln('PASS terminal read deadline and retained caller buffer contents');
 +      end
-+    else if Mode='eof' then
++    else if (Mode='eof') or (Mode='eofobserve') then
 +      begin
 +      Count:=0;
 +      while Count<3 do
@@ -4560,16 +4636,36 @@ index 0000000000..7b83011bc5
 +      Status:=API.Read(Context,@ByteValue,1,1,Domain,Code);
 +      Check(Status=0,'repeated clean EOF',Domain,Code);
 +      Writeln('PASS data before clean/repeated EOF');
++      if Mode='eofobserve' then
++        begin
++        Sleep(500);
++        Status:=API.Read(Context,@ByteValue,1,DeadlineMS,Domain,Code);
++        Writeln('OBSERVED later EOF status=',Status,' domain=',Domain,' code=',Code);
++        end;
 +      end
-+    else if Mode='reset' then
++    else if (Mode='reset') or (Mode='finobserve') then
 +      begin
 +      Status:=API.Read(Context,@ByteValue,1,DeadlineMS,Domain,Code);
-+      Check((Status=-1) and (Domain<>0) and (Code<>0) and
-+        not ((Domain=POSIXDomain) and (Code=DarwinETIMEDOUT)),
-+        'transport abort is an error',Domain,Code);
-+      Writeln('PASS transport abort rejected as clean EOF');
++      if Mode='finobserve' then
++        begin
++        Writeln('OBSERVED first FIN status=',Status,' domain=',Domain,' code=',Code);
++        Sleep(500);
++        Status:=API.Read(Context,@ByteValue,1,DeadlineMS,Domain,Code);
++        Writeln('OBSERVED later FIN status=',Status,' domain=',Domain,' code=',Code);
++        Writeln('DIAGNOSTIC only: no strict truncation acceptance claim');
++        end
++      else
++        begin
++        Check((Status=-1) and (Domain<>0) and (Code<>0) and
++          not ((Domain=POSIXDomain) and (Code=DarwinETIMEDOUT)),
++          'transport abort is an error',Domain,Code);
++        Writeln('PASS transport abort rejected as clean EOF');
++        end;
 +      end;
 +  finally
++{$ifdef FPC_NETWORKFRAMEWORK_DIAGNOSTICS}
++    Writeln('OBSERVED before local Close ',NetworkFrameworkReceiveDiagnostics);
++{$endif}
 +    if Context<>nil then API.Close(Context);
 +    AwaitNativeRelease;
 +  end;
@@ -4597,10 +4693,10 @@ index 0000000000..7b83011bc5
 +end.
 diff --git a/packages/fcl-tls/tests/macos/testnetworktls.py b/packages/fcl-tls/tests/macos/testnetworktls.py
 new file mode 100644
-index 0000000000..116c4373d1
+index 0000000000..a0170da37d
 --- /dev/null
 +++ b/packages/fcl-tls/tests/macos/testnetworktls.py
-@@ -0,0 +1,207 @@
+@@ -0,0 +1,226 @@
 +"""macOS native TLS acceptance, using existing Python ssl/OpenSSL only as servers.
 +
 +The Pascal clients load system Network/Security, never the fixture's TLS library.
@@ -4676,7 +4772,7 @@ index 0000000000..116c4373d1
 +            '-enddate', (now-timedelta(days=1)).strftime('%Y%m%d%H%M%SZ'), '-out', root / 'expired.pem')
 +
 +    def execute(name, command, observed=None):
-+        row = {'case': name, **(observed or {})}
++        row = {'case': name, 'diagnostic_only': 'observation' in name, **(observed or {})}
 +        try:
 +            run = subprocess.run(list(map(str, command)), capture_output=True, text=True, timeout=25)
 +            row.update(returncode=run.returncode, stdout=run.stdout, stderr=run.stderr)
@@ -4684,12 +4780,12 @@ index 0000000000..116c4373d1
 +            row.update(returncode=-1, error=str(exc))
 +        results.append(row)
 +        save()
-+        print(('PASS' if row['returncode'] == 0 else 'FAIL'), name,
++        print(('DIAGNOSTIC' if row['diagnostic_only'] else 'PASS') if row['returncode'] == 0 else 'FAIL', name,
 +              row.get('stdout', '').strip().replace('\n', ' | '), row.get('stderr', '').strip(), flush=True)
 +        return row
 +
 +    def local(name, mode='http', certificate='valid', verify='false', callback='true',
-+              after='false', expected='pass', calls=1, requests=1, tls='tls12', reset=False):
++              after='false', expected='pass', calls=1, requests=1, tls='tls12', framing=None):
 +        listener = socket.socket()
 +        listener.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 16384)
 +        listener.bind(('127.0.0.1', 0))
@@ -4725,9 +4821,21 @@ index 0000000000..116c4373d1
 +                            _, data = data.split(b'\r\n\r\n', 1)
 +                            observed['requests'] += 1
 +                            body = b'native tls fixture\n'
-+                            response = b'HTTP/1.1 200 OK\r\nContent-Length: '+str(len(body)).encode()+b'\r\nConnection: keep-alive\r\n\r\n'+body
++                            if framing in ('chunk-truncated', 'chunk-complete'):
++                                response = b'HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n'+f'{len(body):x}'.encode()+b'\r\n'+body+b'\r\n'
++                                if framing == 'chunk-complete':
++                                    response += b'0\r\n\r\n'
++                            else:
++                                length = len(body)+(5 if framing == 'length-truncated' else 0)
++                                response = b'HTTP/1.1 200 OK\r\nContent-Length: '+str(length).encode()+b'\r\nConnection: keep-alive\r\n\r\n'+body
 +                            for offset in range(0, len(response), 7):
 +                                secure.sendall(response[offset:offset+7])
++                            if framing in ('length-truncated', 'chunk-truncated'):
++                                fd = secure.detach()
++                                with socket.socket(fileno=fd) as raw:
++                                    raw.shutdown(socket.SHUT_WR)
++                                observed['bare_fin_after_incomplete_http'] = True
++                                return
 +                    elif mode == 'echo':
 +                        while not stop.is_set():
 +                            data = secure.recv(4096)
@@ -4735,8 +4843,8 @@ index 0000000000..116c4373d1
 +                                break
 +                            for offset in range(0, len(data), 113):
 +                                secure.sendall(data[offset:offset+113])
-+                    elif mode in ('eof', 'reset', 'fin'):
-+                        if mode == 'eof':
++                    elif mode in ('eof', 'reset', 'fin', 'finobserve', 'eofobserve'):
++                        if mode in ('eof', 'eofobserve'):
 +                            secure.sendall(b'abc')
 +                            secure.unwrap().close()
 +                        else:
@@ -4748,8 +4856,8 @@ index 0000000000..116c4373d1
 +                                    raw.shutdown(socket.SHUT_WR)
 +                    elif mode == 'timeout':
 +                        if not stop.wait(0.15):
-+                            secure.sendall(b'late-data')
 +                            observed['late_send_attempt'] = True
++                            secure.sendall(b'late-data')
 +                    else:
 +                        stop.wait(12)
 +            except (ssl.SSLError, OSError) as exc:
@@ -4791,6 +4899,10 @@ index 0000000000..116c4373d1
 +        local(tls+'-after-create-false', verify='true', after='true', tls=tls)
 +        local(tls+'-callback-veto', callback='false', expected='veto', tls=tls)
 +        local(tls+'-http-keepalive', requests=2, tls=tls)
++        local(tls+'-fin-observation', mode='finobserve', tls=tls)
++        local(tls+'-eof-observation', mode='eofobserve', tls=tls)
++        for framing in ('length-truncated', 'chunk-truncated', 'chunk-complete'):
++            local(tls+'-'+framing, framing=framing, expected='pass' if framing == 'chunk-complete' else 'framing', tls=tls)
 +        for mode in ('echo', 'timeout', 'writetimeout', 'connecttimeout', 'close', 'canclose', 'eof', 'reset', 'fin'):
 +            local(tls+'-'+mode, mode=mode, tls=tls)
 +    # Public controls use the runner's system trust unchanged. Both settings run
@@ -4802,7 +4914,10 @@ index 0000000000..116c4373d1
 +                                               1 if expected == 'pass' else 0, 'public', 1])
 +    save()
 +    failures = [row['case'] for row in results if row.get('returncode') != 0]
-+    print('RESULT', len(results), 'cases;', len(failures), 'failed:', ', '.join(failures), flush=True)
++    acceptance = [row for row in results if not row.get('diagnostic_only')]
++    diagnostic = [row for row in results if row.get('diagnostic_only')]
++    print('RESULT', len(acceptance), 'acceptance cases;', sum(row['returncode'] != 0 for row in acceptance),
++          'failed;', len(diagnostic), 'diagnostic observations;', len(failures), 'total failed:', ', '.join(failures), flush=True)
 +    raise SystemExit(bool(failures))
 +
 +
@@ -5033,10 +5148,10 @@ index 0000000000..15e78cbeea
 +end.
 diff --git a/packages/fcl-tls/tests/testhttpconnection.pp b/packages/fcl-tls/tests/testhttpconnection.pp
 new file mode 100644
-index 0000000000..b9c5145c71
+index 0000000000..545472bd05
 --- /dev/null
 +++ b/packages/fcl-tls/tests/testhttpconnection.pp
-@@ -0,0 +1,279 @@
+@@ -0,0 +1,302 @@
 +{ Pre-TCP transport model; no native or socket connection is opened. }
 +program testhttpconnection;
 +{$mode objfpc}{$H+}
@@ -5096,7 +5211,7 @@ index 0000000000..b9c5145c71
 +  SeenConnectTimeout, SeenIOTimeout: Cardinal;
 +  SeenVerify, FailConnect, FailRead, FailFactory: Boolean;
 +  LastConnection: TMockConnection;
-+  Detached: Integer;
++  Detached, ResponseMode: Integer;
 +  SeenHost: String; SeenPort: Word;
 +procedure Check(Condition: Boolean; const Name: String);
 +begin
@@ -5146,8 +5261,13 @@ index 0000000000..b9c5145c71
 +  if Pos(#13#10#13#10,FRequest)>0 then
 +    begin
 +    Inc(Requests); FRequest:='';
-+    FReply:=FReply+'HTTP/1.1 200 OK'+#13#10+'Content-Length: 5'+#13#10+
-+      'Connection: keep-alive'+#13#10#13#10+'hello';
++    case ResponseMode of
++      1: FReply:=FReply+'HTTP/1.1 200 OK'+#13#10+'Content-Length: 5'+#13#10#13#10+'hel';
++      2: FReply:=FReply+'HTTP/1.1 200 OK'+#13#10+'Transfer-Encoding: chunked'+#13#10#13#10+'5'+#13#10+'hel';
++      3: FReply:=FReply+'HTTP/1.1 200 OK'+#13#10+'Transfer-Encoding: chunked'+#13#10#13#10+'5'+#13#10+'hello'+#13#10+'0'+#13#10#13#10;
++      else FReply:=FReply+'HTTP/1.1 200 OK'+#13#10+'Content-Length: 5'+#13#10+
++        'Connection: keep-alive'+#13#10#13#10+'hello';
++    end;
 +    end;
 +end;
 +function TMockConnection.CanRead(Timeout: Integer): Boolean;
@@ -5196,7 +5316,7 @@ index 0000000000..b9c5145c71
 +begin
 + Created:=0;Connects:=0;Closes:=0;Destroyed:=0;HandlerDestroyed:=0;Requests:=0;
 + FailConnect:=False;FailRead:=False;FailFactory:=False; SeenHost:='';SeenPort:=0;
-+ LastConnection:=Nil;Detached:=0;
++ LastConnection:=Nil;Detached:=0;ResponseMode:=0;
 +end;
 +var C: THTTP; Body: AnsiString; ErrorText: String; E: TEvents; Connection: TClientConnection;
 +procedure ExpectError(Client: THTTP; const Text, Name: String);
@@ -5269,6 +5389,24 @@ index 0000000000..b9c5145c71
 +  finally C.Free end;
 +  Reset; C:=THTTP.Create(Nil);
 +  try
++    ResponseMode:=1;
++    ExpectError(C,'Unexpected end of HTTP response','native Content-Length truncation rejected');
++    Check((Destroyed=1) and (HandlerDestroyed=1),'truncated Content-Length cleanup');
++  finally C.Free end;
++  Reset; C:=THTTP.Create(Nil);
++  try
++    ResponseMode:=2;
++    ExpectError(C,'Unexpected end of HTTP response','native chunk truncation rejected');
++    Check((Destroyed=1) and (HandlerDestroyed=1),'truncated chunk cleanup');
++  finally C.Free end;
++  Reset; C:=THTTP.Create(Nil);
++  try
++    ResponseMode:=3;
++    Check(C.Get('https://127.0.0.1:1/')='hello','complete native chunk framing accepted');
++    Check((Destroyed=1) and (HandlerDestroyed=1),'complete chunk cleanup');
++  finally C.Free end;
++  Reset; C:=THTTP.Create(Nil);
++  try
 +    C.KeepConnection:=True;
 +    C.Get('https://127.0.0.1:1/first'); C.IOTimeout:=789;
 +    C.Get('https://127.0.0.1:1/second');
@@ -5318,16 +5456,17 @@ index 0000000000..b9c5145c71
 +end.
 diff --git a/packages/fcl-tls/tests/testloader.py b/packages/fcl-tls/tests/testloader.py
 new file mode 100644
-index 0000000000..ec9eb23ad5
+index 0000000000..ec4b769f0d
 --- /dev/null
 +++ b/packages/fcl-tls/tests/testloader.py
-@@ -0,0 +1,89 @@
+@@ -0,0 +1,95 @@
 +"""Windows smart-loader tests using isolated application directories.
 +
 +Requires the compiled testsmart.exe, tlsstub.dll, and an existing real OpenSSL
 +pair. Does not install or download libraries; does not touch DLLs in the source.
 +"""
 +import argparse
++from contextlib import nullcontext
 +from pathlib import Path
 +import shutil
 +import struct
@@ -5342,9 +5481,14 @@ index 0000000000..ec9eb23ad5
 +    parser.add_argument("ssl", type=Path)
 +    parser.add_argument("crypto", type=Path)
 +    parser.add_argument("--binding", type=Path)
++    parser.add_argument("--output", type=Path, help="Preserve fixtures in a fresh directory instead of deleting them")
 +    args = parser.parse_args()
 +    checks = 0
-+    with tempfile.TemporaryDirectory(prefix="fpc-tls-loader-") as temp:
++    if args.output:
++        args.output = args.output.resolve()
++        args.output.mkdir(parents=True, exist_ok=False)
++    fixture_owner = nullcontext(str(args.output)) if args.output else tempfile.TemporaryDirectory(prefix="fpc-tls-loader-")
++    with fixture_owner as temp:
 +        root = Path(temp)
 +
 +        def case(name, libraries, mode="", expected="SELECTED Schannel", success=True, extra=()):
@@ -6968,7 +7112,7 @@ index 0000000000..3a33abf4f8
 +exports TLSStub;
 +begin end.
 diff --git a/packages/fcl-web/src/base/fphttpclient.pp b/packages/fcl-web/src/base/fphttpclient.pp
-index ae0d8d6555..1367556274 100644
+index ae0d8d6555..446f4e86d1 100644
 --- a/packages/fcl-web/src/base/fphttpclient.pp
 +++ b/packages/fcl-web/src/base/fphttpclient.pp
 @@ -22,10 +22,10 @@ interface
@@ -7005,7 +7149,15 @@ index ae0d8d6555..1367556274 100644
      // Return the buffer and empty the local buffer.
      function ExtractBuffer : AnsiString;
      // Only quote CR/LF/" characters
-@@ -689,7 +696,10 @@ procedure TFPCustomHTTPClient.SetRequestHeaders(const AValue: TStrings);
+@@ -544,6 +551,7 @@ implementation
+   SErrUnexpectedResponse = 'Unexpected response status code: %d';
+   SErrChunkTooBig = 'Chunk too big: Got %d, maximum allowed size: %d';
+   SErrChunkLineEndMissing = 'Chunk line end missing';
++  SErrUnexpectedResponseEnd = 'Unexpected end of HTTP response';
+   SErrMaxRedirectsReached = 'Maximum allowed redirects reached : %d';
+   SErrNoEventStream = 'No Event Stream returned by server';
+   SerrResponseContentTooBig = 'Response content size exceeds max. allowed size (%d)';
+@@ -689,7 +697,10 @@ procedure TFPCustomHTTPClient.SetRequestHeaders(const AValue: TStrings);
  procedure TFPCustomHTTPClient.SetIOTimeout(AValue: Integer);
  begin
    if AValue=FIOTimeout then exit;
@@ -7016,7 +7168,7 @@ index ae0d8d6555..1367556274 100644
    if Assigned(FSocket) then
      FSocket.IOTimeout:=AValue;
  end;
-@@ -702,7 +712,7 @@ procedure TFPCustomHTTPClient.SetConnectTimeout(AValue: Integer);
+@@ -702,7 +713,7 @@ procedure TFPCustomHTTPClient.SetConnectTimeout(AValue: Integer);
  
  function TFPCustomHTTPClient.IsConnected: Boolean;
  begin
@@ -7025,7 +7177,7 @@ index ae0d8d6555..1367556274 100644
  end;
  
  function TFPCustomHTTPClient.NoContentAllowed(ACode: Integer): Boolean;
-@@ -781,6 +791,7 @@ function TFPCustomHTTPClient.GetSocketHandler(const UseSSL: Boolean): TSocketHan
+@@ -781,6 +792,7 @@ function TFPCustomHTTPClient.GetSocketHandler(const UseSSL: Boolean): TSocketHan
  
  begin
    Result:=Nil;
@@ -7033,7 +7185,7 @@ index ae0d8d6555..1367556274 100644
    if Assigned(FonGetSocketHandler) then
      FOnGetSocketHandler(Self,UseSSL,Result);
    if (Result=Nil) then
-@@ -797,12 +808,30 @@ function TFPCustomHTTPClient.GetSocketHandler(const UseSSL: Boolean): TSocketHan
+@@ -797,12 +809,30 @@ function TFPCustomHTTPClient.GetSocketHandler(const UseSSL: Boolean): TSocketHan
        Result:=TSocketHandler.Create;
    if Assigned(AfterSocketHandlerCreate) then
      AfterSocketHandlerCreate(Self,Result);
@@ -7064,7 +7216,7 @@ index ae0d8d6555..1367556274 100644
  end;
  
  function TFPCustomHTTPClient.ExtractBuffer: AnsiString;
-@@ -820,49 +849,59 @@ function TFPCustomHTTPClient.SimpleQuote(const aValue: string): string;
+@@ -820,49 +850,59 @@ function TFPCustomHTTPClient.SimpleQuote(const aValue: string): string;
  
  procedure TFPCustomHTTPClient.ConnectToServer(const AHost: String;
    APort: Integer; UseSSL : Boolean = False);
@@ -7161,7 +7313,7 @@ index ae0d8d6555..1367556274 100644
    end;
  end;
  
-@@ -878,6 +917,7 @@ procedure TFPCustomHTTPClient.DisconnectFromServer;
+@@ -878,6 +918,7 @@ procedure TFPCustomHTTPClient.DisconnectFromServer;
    lSocket : TSocketStream;
  
  begin
@@ -7169,7 +7321,7 @@ index ae0d8d6555..1367556274 100644
    lSocket:=ExtractSocket;
    lSocket.Free;
  end;
-@@ -890,12 +930,14 @@ function TFPCustomHTTPClient.ProtocolSupported(Protocol: String; out IsSSL: Bool
+@@ -890,12 +931,14 @@ function TFPCustomHTTPClient.ProtocolSupported(Protocol: String; out IsSSL: Bool
  
  function TFPCustomHTTPClient.ReadFromSocket(var Buffer; Count: Longint): Longint;
  begin
@@ -7186,7 +7338,7 @@ index ae0d8d6555..1367556274 100644
  end;
  
  function TFPCustomHTTPClient.AllowHeader(var AHeader: String): Boolean;
-@@ -1349,7 +1391,7 @@ procedure TFPCustomHTTPClient.SetKeepConnection(AValue: Boolean);
+@@ -1349,7 +1392,7 @@ procedure TFPCustomHTTPClient.SetKeepConnection(AValue: Boolean);
    FKeepConnection:=AValue;
    if AValue then
      HTTPVersion:='1.1'
@@ -7195,7 +7347,25 @@ index ae0d8d6555..1367556274 100644
      DisconnectFromServer;
    CheckConnectionCloseHeader;
  end;
-@@ -1610,6 +1652,8 @@ procedure TFPCustomHTTPClient.StartEventStream;
+@@ -1413,6 +1456,8 @@ function TFPCustomHTTPClient.ReadResponse(Stream: TStream; const AllowedResponse
+       Cnt:=ReadFromSocket(FBuffer[1],length(FBuffer));
+       If Cnt<0 then
+         Raise EHTTPClientSocketRead.Create(SErrReadingSocket);
++      if (Cnt=0) and Assigned(FClientConnection) then
++        Raise EHTTPClientSocketRead.Create(SErrUnexpectedResponseEnd);
+       SetLength(FBuffer,Cnt);
+       BufPos:=1;
+       Result:=Cnt>0;
+@@ -1546,6 +1591,8 @@ function TFPCustomHTTPClient.ReadResponse(Stream: TStream; const AllowedResponse
+         R:=Transfer(LB);
+         L:=L-R;
+       until (L=0) or (R=0) or Terminated;
++      if (L>0) and not Terminated and Assigned(FClientConnection) then
++        Raise EHTTPClientSocketRead.Create(SErrUnexpectedResponseEnd);
+       end
+     else if (L<0) and (Not NoContentAllowed(ResponseStatusCode)) then
+       begin
+@@ -1610,6 +1657,8 @@ procedure TFPCustomHTTPClient.StartEventStream;
    lSocket : TSocketStream;
    lBuffer : AnsiString;
  begin
@@ -7204,7 +7374,7 @@ index ae0d8d6555..1367556274 100644
    lBuffer:=ExtractBuffer;
    lSocket:=ExtractSocket;
    lSource:=CreateEventSource(lSocket,lBuffer);
-@@ -1652,9 +1696,13 @@ procedure TFPCustomHTTPClient.DoKeepConnectionRequest(const AURI: TURI; const AM
+@@ -1652,9 +1701,13 @@ procedure TFPCustomHTTPClient.DoKeepConnectionRequest(const AURI: TURI; const AM
    SkipReconnect := False;
    ACount := 0;
  
@@ -7221,7 +7391,7 @@ index ae0d8d6555..1367556274 100644
      DisconnectFromServer;
  
    Repeat
-@@ -1716,6 +1764,10 @@ procedure TFPCustomHTTPClient.DoMethod(const AMethod, AURL: String; Stream: TStr
+@@ -1716,6 +1769,10 @@ procedure TFPCustomHTTPClient.DoMethod(const AMethod, AURL: String; Stream: TStr
    p:=LowerCase(URI.Protocol);
    If Not ProtocolSupported(p, IsHttps) then
     Raise EHTTPClient.CreateFmt(SErrInvalidProtocol,[URI.Protocol]);
@@ -7232,7 +7402,7 @@ index ae0d8d6555..1367556274 100644
    HeadersOnly:=CompareText(AMethod,'HEAD')=0;
    if FKeepConnection then
      DoKeepConnectionRequest(URI,AMethod,Stream,AllowedResponseCodes,HeadersOnly,IsHttps)
-@@ -1745,7 +1797,7 @@ constructor TFPCustomHTTPClient.Create(AOwner: TComponent);
+@@ -1745,7 +1802,7 @@ constructor TFPCustomHTTPClient.Create(AOwner: TComponent);
  
  destructor TFPCustomHTTPClient.Destroy;
  begin

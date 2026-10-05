@@ -33,8 +33,11 @@ for relative in ['Network.framework/Headers/connection.h', 'Network.framework/He
     lines=path.read_text().splitlines()
     matches=[i for i,line in enumerate(lines) if re.search(r'close.?notify|truncat|\bEOF\b|nw_connection_receive_completion_t',line,re.I)]
     for index in matches:
-        print('\n'.join(f'{i+1}: {lines[i]}' for i in range(max(0,index-2),min(len(lines),index+4))))
+        after=48 if '@typedef nw_connection_receive_completion_t' in lines[index] else 4
+        print('\n'.join(f'{i+1}: {lines[i]}' for i in range(max(0,index-2),min(len(lines),index+after))))
     if not matches: print('No close-notify/truncation/EOF declaration matched')
+    if 'SecProtocol' in relative:
+        print('PUBLIC_NAMES', ' '.join(sorted(set(re.findall(r'sec_protocol_(?:options|metadata)_[a-z0-9_]+',path.read_text())))))
 PY
 if [[ "$expected_arch" = arm64 ]]; then cpu=aarch64; compiler_name=ppca64; minimum=11.0; else cpu=x86_64; compiler_name=ppcx64; minimum=10.8; fi
 bootstrap="${FPC_BOOTSTRAP_COMPILER:-}"

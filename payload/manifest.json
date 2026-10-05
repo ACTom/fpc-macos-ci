@@ -2,7 +2,7 @@
   "base_repository": "https://gitlab.com/ACTom/source",
   "base_commit": "56900cd3a58b32cf3c0f8a3b48443a139bab8e0d",
   "source_branch": "feature/native-tls-smart-sockets",
-  "patch_sha256": "e2f32b760fd8efd08a9e8d406ca5ae17c3ba6b38bbe44da1358402194837dcea",
+  "patch_sha256": "2368ca71688b9c30363ab2d6589f7ebe3bc9a1471e3011760a4cfe930f0a2412",
   "scope": "Windows Schannel/selector; pure Pascal Network.framework plus HTTP seam, Darwin build/link and real TLS observed; strict FIN unresolved",
   "windows_validation": {
     "package_build_exit": 0,
