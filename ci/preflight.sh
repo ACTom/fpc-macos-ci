@@ -20,6 +20,22 @@ stage() {
 sw_vers
 sdk="$(xcrun --sdk macosx --show-sdk-path)"
 xcrun clang --version
+python3 - "$sdk" <<'PY' | tee "$output_dir/sdk-tls-api-audit.txt"
+from pathlib import Path
+import re, sys
+sdk=Path(sys.argv[1])/'System/Library/Frameworks'
+for relative in ['Network.framework/Headers/connection.h', 'Network.framework/Headers/tls_options.h',
+                 'Security.framework/Headers/SecProtocolMetadata.h', 'Security.framework/Headers/SecProtocolOptions.h']:
+    path=sdk/relative
+    print('SDK_HEADER',relative)
+    if not path.is_file():
+        print('NOT FOUND'); continue
+    lines=path.read_text().splitlines()
+    matches=[i for i,line in enumerate(lines) if re.search(r'close.?notify|truncat|\bEOF\b|nw_connection_receive_completion_t',line,re.I)]
+    for index in matches:
+        print('\n'.join(f'{i+1}: {lines[i]}' for i in range(max(0,index-2),min(len(lines),index+4))))
+    if not matches: print('No close-notify/truncation/EOF declaration matched')
+PY
 if [[ "$expected_arch" = arm64 ]]; then cpu=aarch64; compiler_name=ppca64; minimum=11.0; else cpu=x86_64; compiler_name=ppcx64; minimum=10.8; fi
 bootstrap="${FPC_BOOTSTRAP_COMPILER:-}"
 if [[ -z "$bootstrap" ]] && command -v fpc >/dev/null 2>&1; then bootstrap="$(command -v fpc)"; fi

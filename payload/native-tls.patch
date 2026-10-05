@@ -916,16 +916,17 @@ index 0000000000..9cb6da8afe
 +include ../build/Makefile.pkg
 diff --git a/packages/fcl-tls/README.md b/packages/fcl-tls/README.md
 new file mode 100644
-index 0000000000..1e5a2a4308
+index 0000000000..f5823f6312
 --- /dev/null
 +++ b/packages/fcl-tls/README.md
-@@ -0,0 +1,197 @@
+@@ -0,0 +1,198 @@
 +# Client TLS selection and native Windows TLS
 +
 +This increment adds a Windows Schannel client and an opt-in `smartsslsockets`
 +unit. It targets this FPC 3.3.1 source branch. A pure Pascal macOS
 +Network.framework client prototype and HTTP transport seam are implemented,
-+but its Darwin branch is uncompiled and unvalidated. It requires the explicit
++with Darwin build/link evidence on both architectures; strict native TCP FIN
++truncation detection remains unresolved. It requires the explicit
 +FPC_NETWORK_FRAMEWORK_NATIVE build define until macOS acceptance is complete;
 +see [docs/macos-transport.md](docs/macos-transport.md).
 +
@@ -1119,16 +1120,18 @@ index 0000000000..1e5a2a4308
 +[test carrier](https://github.com/ACTom/fpc-macos-ci). No further CI was started.
 diff --git a/packages/fcl-tls/docs/macos-transport.md b/packages/fcl-tls/docs/macos-transport.md
 new file mode 100644
-index 0000000000..664f2426b5
+index 0000000000..535dc3bf4e
 --- /dev/null
 +++ b/packages/fcl-tls/docs/macos-transport.md
-@@ -0,0 +1,153 @@
+@@ -0,0 +1,193 @@
 +# Pure Pascal Network.framework client prototype
 +
 +The connection layer, SSL handler and fphttpclient connection factory are now
 +implemented in Pascal. No C object or third party TLS library is a runtime
-+dependency of the native backend. The Darwin branch has not yet been compiled,
-+linked or run. It is deliberately opt-in with FPC_NETWORK_FRAMEWORK_NATIVE;
++dependency of the native backend. Both Darwin architectures have compiled,
++linked and passed construction on macOS 15.7.9. Real TLS acceptance is under
++review, including a TCP FIN truncation limitation. It remains opt-in with
++FPC_NETWORK_FRAMEWORK_NATIVE;
 +without that define smart Darwin selection reports native unavailable.
 +
 +## Connection and ownership
@@ -1170,8 +1173,8 @@ index 0000000000..664f2426b5
 +The loader resolves mandatory APIs from fixed system framework/libSystem paths
 +under a one-time lock. Missing frameworks/symbols make native unavailable.
 +Handles remain for the process lifetime because callbacks can finish late.
-+Network/Security are not strong link imports. FPC-generated blockrtl ISA imports
-+still need a real Mach-O link audit. The branch's default deployment targets
++The native harness Mach-O audit found no strong Network/Security or third-party
++TLS imports; FPC Blocks ISA symbols resolve through libSystem. The branch's default deployment targets
 +(x86_64 10.8, arm64 11.0) include Blocks, but this work does not establish every
 +custom older deployment setting. Network.framework is checked at runtime;
 +the branch baseline is not raised. iOS/iphonesim are excluded. Secure Transport
@@ -1185,8 +1188,10 @@ index 0000000000..664f2426b5
 +Close publishes cancellation, wakes waiters and cancels the connection; pending
 +callbacks retain their contexts until completion. Close is cancellation, not a
 +claim of graceful TLS close_notify. A receive error takes priority over EOF,
-+and already-delivered plaintext precedes a deferred error. Real Apple truncation
-+behavior remains untested. CanRead timeout is benign; connect/read/write
++and already-delivered plaintext precedes a deferred error. On macOS 15.7.9,
++Network.framework reports a bare TCP FIN without TLS close_notify as error-free
++EOF, just like clean TLS closure. The strict truncation test remains failed;
++the native backend does not currently distinguish these closures. CanRead timeout is benign; connect/read/write
 +deadlines are terminal. Mach monotonic time drives native deadlines.
 +
 +VerifyPeerCert=True retains system trust and logical hostname validation.
@@ -1208,13 +1213,21 @@ index 0000000000..664f2426b5
 +The native harness tests/macos/testnetworknative.pp supports construction
 +without TCP, trusted ready, exact-domain/code rejection, 1 MiB fragmented echo,
 +idle deadlines, concurrent Close/CanRead cancellation, clean EOF and TCP abort.
-+Only a specific expected certificate error may satisfy a certificate case;
-+an arbitrary network error must fail. Its current short post-close wait cannot
-+prove eventual native reference cleanup. Before accepting macOS HTTPS, add
-+observable context-release waits and real late send/receive/state callbacks,
-+TLS TCP FIN without close_notify, DNS/IP identities and trust fixtures, keep-alive
-+protocol changes and server-side connection counts. No system root installation
-+is implicit. Native callbacks from external threads also require runtime checks.
++Only an explicit TLS certificate-domain/code may satisfy a certificate case;
++an arbitrary network error must fail. FPC_NETWORKFRAMEWORK_DIAGNOSTICS adds
++atomic live/destroyed context counters, and each native test waits up to five
++seconds for all pending contexts to drain. These counts observe context release,
++not every system allocation or sanitizer result.
++
++The sibling testnetworkhttp.pp and testnetworktls.py generate disposable private
++server certificates with an existing OpenSSL CLI, use existing Python ssl only
++as the TLS server and exercise Pascal clients with no third-party TLS binding
++loaded. The matrix records TLS1.2/1.3, False/default/after-create, True rejection,
++application vetoes, HTTP connection counts, partial 1 MiB echo, terminal deadlines,
++concurrent cancellation, clean EOF, RST and bare FIN separately. Private roots
++remain untrusted, so their wrong-name/expired leaves do not isolate those failures.
++Public example.com/badssl controls use unchanged system trust. Every attempt and
++error remains in results.json; there are no retries that turn failures into passes.
 +
 +With a branch-built Darwin compiler/RTL, typical flags are:
 +
@@ -1228,13 +1241,21 @@ index 0000000000..664f2426b5
 +paths and package/native compile defines consistent. Do not link the earlier
 +C bridge or set FPC_NETWORK_FRAMEWORK_BRIDGE.
 +
++The standalone tests/macos/run.sh accepts an existing branch-built compiler
++and a fresh absolute output directory. It uses the existing Apple SDK and does
++not provision software or certificates in system trust:
++
++```sh
++bash packages/fcl-tls/tests/macos/run.sh /absolute/path/to/compiler/ppca64 /tmp/fpc-native-tls-fresh
++```
++
 +CI orchestration belongs solely to
 +[ACTom/fpc-macos-ci](https://github.com/ACTom/fpc-macos-ci), outside this source
-+patch. Its updated preflight requires an existing compatible Darwin FPC or an
-+explicitly approved temporary bootstrap. Without one it reports NOT RUN and
-+fails the job. It downloads/installs no compiler itself. The proposed official
-+bootstrap and one bounded additional manual run require separate authorization.
-+No additional run has been dispatched.
++patch. Manual runs use the approved official 3.2.2 DMG only as a temporary
++bootstrap: read-only mount, pkgutil extraction, no installer scripts, then build
++the pinned branch compiler and RTL. The owner approved at most 20 cumulative
++workflow executions, including prior attempts; the two-architecture matrix counts
++once. Each repeat requires diagnosis and a reviewed exact carrier SHA.
 +
 +## Historical first preflight
 +
@@ -1270,12 +1291,32 @@ index 0000000000..664f2426b5
 +The bootstrap script incorrectly passed `lipo -verify_arch <arch> <file>`;
 +lipo treated the trailing filename as another architecture and exited 1.
 +The correction is `lipo <file> -verify_arch <arch>`, following the actual tool's
-+usage. It is prepared and shell syntax checked, not revalidated on macOS.
++usage. Subsequent runs validated the corrected bootstrap hello on both architectures.
 +Version/target queries, bootstrap hello, compiler cycle/RTL, branch Blocks,
 +native compile/link/construction/imports and package/models were NOT RUN.
-+No native TLS connection occurred. Only the single newly authorized dispatch
-+was made; no automatic or manual retry followed this failure. Text evidence
++No native TLS connection occurred in this historical run. Subsequent diagnosed
++runs under the owner's expanded authorization are recorded separately. Text evidence
 +was retained for each architecture. Existing Windows evidence remains unchanged.
++
++## Darwin build and initial TLS evidence
++
++Run 37336482398 passed the official bootstrap hello, branch compiler cycle/RTL
++and three branch Blocks ABI checks on both architectures. Native compilation
++failed at Assigned(cblock); the required completion is now called directly
++inside the foreign exception boundary.
++
++Run 37338838447 (carrier 2770bcdabbf8f3b449261f9303ac1d90d0a70479) passed native
++compile/link, construction/context drain, Mach-O imports and complete packages
++on both architectures. The load-command minimums remain 10.8 (x86_64) and 11.0
++(arm64); this is a linker audit, not old-system runtime evidence. A standalone
++model compile then failed due to missing rtl-extra BSD include paths in the CI
++command; package compilation itself passed.
++
++Run 37340068774 adds those declared include paths and native TLS fixtures.
++Its first ARM results establish actual Pascal HTTPS, False/True behavior and
++pending-context release. Strict TCP FIN rejection fails because the native
++framework returns clean EOF. Final per-architecture acceptance results must be
++read independently; Windows tests supply no Apple runtime evidence.
 diff --git a/packages/fcl-tls/docs/openssl-eof.md b/packages/fcl-tls/docs/openssl-eof.md
 new file mode 100644
 index 0000000000..475c795980
@@ -4079,9 +4120,48 @@ index 0000000000..d0f5d95298
 +  end;
 +end;
 +end.
+diff --git a/packages/fcl-tls/tests/macos/run.sh b/packages/fcl-tls/tests/macos/run.sh
+new file mode 100644
+index 0000000000..db0faab039
+--- /dev/null
++++ b/packages/fcl-tls/tests/macos/run.sh
+@@ -0,0 +1,33 @@
++#!/bin/bash
++# Existing branch compiler/RTL and Apple SDK only; no download or installation.
++set -euo pipefail
++source_dir="$(cd "$(dirname "$0")/../../../.." && pwd)"
++compiler="${1:?Pass existing branch-built Darwin compiler}"
++output_dir="${2:?Pass a fresh absolute output directory}"
++test "$(uname -s)" = Darwin
++test "$("$compiler" -iTO)" = darwin
++test "$("$compiler" -iV)" = 3.3.1
++cpu="$("$compiler" -iTP)"
++case "$cpu" in x86_64|aarch64) ;; *) echo 'Requires 64-bit Darwin' >&2; exit 1;; esac
++[[ "$output_dir" = /* ]]
++test ! -e "$output_dir"
++mkdir -p "$output_dir"
++sdk="$(xcrun --sdk macosx --show-sdk-path)"
++tools_dir="$(dirname "$(xcrun --sdk macosx --find ld)")"
++options=(-n -B -gl -dFPC_NETWORK_FRAMEWORK_NATIVE -dFPC_NETWORKFRAMEWORK_DIAGNOSTICS
++  "-XR$sdk" "-FD$tools_dir" "-Fu$source_dir/rtl/units/$cpu-darwin"
++  "-Fu$source_dir/packages/fcl-net/src" "-Fu$source_dir/packages/fcl-tls/src"
++  "-Fu$source_dir/packages/fcl-web/src/base" "-Fu$source_dir/packages/fcl-base/src"
++  "-Fu$source_dir/packages/rtl-objpas/src/inc" "-Fu$source_dir/packages/rtl-extra/src/unix"
++  "-Fu$source_dir/packages/rtl-extra/src/darwin" "-Fu$source_dir/packages/rtl-extra/src/bsd"
++  "-Fu$source_dir/packages/openssl/src" "-Fu$source_dir/packages/gnutls/src"
++  "-Fi$source_dir/packages/fcl-net/src/unix" "-Fi$source_dir/packages/rtl-extra/src/inc"
++  "-Fi$source_dir/packages/rtl-extra/src/bsd" "-Fi$source_dir/packages/rtl-extra/src/unix"
++  "-Fi$source_dir/packages/rtl-extra/src/darwin" "-FU$output_dir" "-FE$output_dir")
++for program in testnetworknative testnetworkhttp; do
++  "$compiler" "${options[@]}" "$source_dir/packages/fcl-tls/tests/macos/$program.pp" 2>&1 | tee "$output_dir/$program-compile.log"
++done
++"$output_dir/testnetworknative" 2>&1 | tee "$output_dir/construction.log"
++otool -L "$output_dir/testnetworkhttp" | tee "$output_dir/http-imports.txt"
++python3 "$source_dir/packages/fcl-tls/tests/macos/testnetworktls.py" "$output_dir/testnetworknative" \
++  "$output_dir/testnetworkhttp" "$output_dir/fixtures" 2>&1 | tee "$output_dir/acceptance.log"
 diff --git a/packages/fcl-tls/tests/macos/testnetworkhttp.pp b/packages/fcl-tls/tests/macos/testnetworkhttp.pp
 new file mode 100644
-index 0000000000..a93597a3cd
+index 0000000000..cad9c8a620
 --- /dev/null
 +++ b/packages/fcl-tls/tests/macos/testnetworkhttp.pp
 @@ -0,0 +1,103 @@
@@ -4127,7 +4207,7 @@ index 0000000000..a93597a3cd
 +begin
 +  { Apple Security/base/SecBase.h: network TLS domain uses these SSL codes.
 +    A TCP reset, EOF, timeout or generic handshake error is never a pass. }
-+  Result:=(Domain=3) and ((Code=-9807) or (Code=-9812) or (Code=-9813) or
++  Result:=(Domain=3) and ((Code=-9807) or (Code=-9808) or (Code=-9812) or (Code=-9813) or
 +    (Code=-9814) or (Code=-9815) or (Code=-9843));
 +end;
 +var Client: TNativeHTTPClient; Observer: TObserver; URL, Expected, BodyMode, Body,
@@ -4171,7 +4251,7 @@ index 0000000000..a93597a3cd
 +      if Expected='pass' then Require(Succeeded,'request must succeed')
 +      else if Expected='certificate' then
 +        Require(not Succeeded and CertificateFailure(Domain,Code),'specific certificate rejection required')
-+      else Require(not Succeeded and (Pos('verification callback',LowerCase(Failure))>0),'callback veto required');
++      else Require(not Succeeded and (Pos('application certificate veto',LowerCase(Failure))>0),'callback veto required');
 +      Require(Observer.Calls=StrToInt(ParamStr(6)),'exact callback count');
 +      if (Expected='pass') and (Requests>1) then Require(Observer.CreatedCount=1,'same native TLS connection reused');
 +      Require(GetSmartTLSBackend=tbNetworkFramework,'backend remains fixed');
@@ -4190,10 +4270,10 @@ index 0000000000..a93597a3cd
 +end.
 diff --git a/packages/fcl-tls/tests/macos/testnetworknative.pp b/packages/fcl-tls/tests/macos/testnetworknative.pp
 new file mode 100644
-index 0000000000..52140fee17
+index 0000000000..7b83011bc5
 --- /dev/null
 +++ b/packages/fcl-tls/tests/macos/testnetworknative.pp
-@@ -0,0 +1,295 @@
+@@ -0,0 +1,321 @@
 +{ Part of FCL; see COPYING.FPC.
 +  Integration harness for the pure Pascal native provider; no C object required.
 +  PENDING: compile/link and run on x86_64 and arm64 macOS with an Apple SDK.
@@ -4312,6 +4392,24 @@ index 0000000000..52140fee17
 +  Writeln('PASS 1 MiB fragmented echo/partial writes/readiness timeout reuse');
 +end;
 +
++procedure WriteTimeout(Context: Pointer);
++var Buffer: array[0..16383] of Byte; Count, Domain, Code: LongInt;
++    Sent, Started: QWord;
++begin
++  FillChar(Buffer,SizeOf(Buffer),$a5); Sent:=0; Started:=GetTickCount64;
++  repeat
++    Count:=API.Write(Context,@Buffer[0],Length(Buffer),10,Domain,Code);
++    if Count>0 then Inc(Sent,Count);
++  until (Count<0) or (Sent>=64*1024*1024) or (GetTickCount64-Started>=5000);
++  Check((Count=-1) and (Domain=POSIXDomain) and (Code=DarwinETIMEDOUT),
++    'terminal send deadline under fixture backpressure',Domain,Code);
++  FillChar(Buffer,SizeOf(Buffer),$5a); Sleep(100);
++  Count:=API.Write(Context,@Buffer[0],Length(Buffer),10,Domain,Code);
++  Check((Count=-1) and (Domain=POSIXDomain) and (Code=DarwinETIMEDOUT),
++    'send deadline remains terminal',Domain,Code);
++  Writeln('PASS terminal send deadline; bytes queued before timeout=',Sent);
++end;
++
 +type
 +  TBlockingCaller = class(TThread)
 +  public
@@ -4398,7 +4496,7 @@ index 0000000000..52140fee17
 +    Assigned(API.Retain) and Assigned(API.Release),'complete native provider ABI',0,0);
 +  if ParamCount=0 then begin Construction; Exit end;
 +  if (ParamCount<>4) and (ParamCount<>6) then
-+    raise Exception.Create('usage: host port 0|1 ready|echo|timeout|close|canclose|eof|reset; or host port 0|1 error domain code');
++    raise Exception.Create('usage: host port 0|1 ready|echo|timeout|writetimeout|connecttimeout|close|canclose|eof|reset; or host port 0|1 error domain code');
 +  Host:=ParamStr(1); Port:=ParamStr(2); Mode:=ParamStr(4);
 +  Check(TryStrToInt(ParamStr(3),Verify) and ((Verify=0) or (Verify=1)),
 +    'verification is exactly 0 or 1',0,0);
@@ -4410,11 +4508,18 @@ index 0000000000..52140fee17
 +    end
 +  else Check((ParamCount=4) and ((Mode='ready') or (Mode='echo') or
 +    (Mode='timeout') or (Mode='close') or (Mode='canclose') or (Mode='eof') or
-+    (Mode='reset')),'known test mode',0,0);
++    (Mode='reset') or (Mode='writetimeout') or (Mode='connecttimeout')),'known test mode',0,0);
 +  Context:=API.CreateConnection(PAnsiChar(Host),PAnsiChar(Port),Verify,Domain,Code);
 +  Check(Context<>nil,'create',Domain,Code);
 +  try
-+    Status:=API.Connect(Context,DeadlineMS,Domain,Code);
++    if Mode='connecttimeout' then Status:=API.Connect(Context,100,Domain,Code)
++    else Status:=API.Connect(Context,DeadlineMS,Domain,Code);
++    if Mode='connecttimeout' then
++      begin
++      Check((Status=-1) and (Domain=POSIXDomain) and (Code=DarwinETIMEDOUT),
++        'terminal handshake deadline',Domain,Code);
++      Writeln('PASS terminal handshake deadline'); Exit;
++      end;
 +    if Mode='error' then
 +      begin
 +      Check((Status=-1) and (Domain=ExpectedDomain) and (Code=ExpectedCode),
@@ -4425,6 +4530,7 @@ index 0000000000..52140fee17
 +    Check(Status=1,'TLS connection ready',Domain,Code);
 +    if Mode='ready' then Writeln('PASS TLS connection ready')
 +    else if Mode='echo' then Echo(Context)
++    else if Mode='writetimeout' then WriteTimeout(Context)
 +    else if (Mode='close') or (Mode='canclose') then ConcurrentClose(Context,Mode='canclose')
 +    else if Mode='timeout' then
 +      begin
@@ -4491,10 +4597,10 @@ index 0000000000..52140fee17
 +end.
 diff --git a/packages/fcl-tls/tests/macos/testnetworktls.py b/packages/fcl-tls/tests/macos/testnetworktls.py
 new file mode 100644
-index 0000000000..42a7d8959f
+index 0000000000..116c4373d1
 --- /dev/null
 +++ b/packages/fcl-tls/tests/macos/testnetworktls.py
-@@ -0,0 +1,203 @@
+@@ -0,0 +1,207 @@
 +"""macOS native TLS acceptance, using existing Python ssl/OpenSSL only as servers.
 +
 +The Pascal clients load system Network/Security, never the fixture's TLS library.
@@ -4602,6 +4708,10 @@ index 0000000000..42a7d8959f
 +                connection, _ = listener.accept()
 +                observed['accepted'] += 1
 +                connection.settimeout(12)
++                if mode == 'connecttimeout':
++                    stop.wait(12)
++                    connection.close()
++                    return
 +                with context.wrap_socket(connection, server_side=True) as secure:
 +                    observed['handshake'] = secure.version()
 +                    if mode == 'http':
@@ -4681,7 +4791,7 @@ index 0000000000..42a7d8959f
 +        local(tls+'-after-create-false', verify='true', after='true', tls=tls)
 +        local(tls+'-callback-veto', callback='false', expected='veto', tls=tls)
 +        local(tls+'-http-keepalive', requests=2, tls=tls)
-+        for mode in ('echo', 'timeout', 'close', 'canclose', 'eof', 'reset', 'fin'):
++        for mode in ('echo', 'timeout', 'writetimeout', 'connecttimeout', 'close', 'canclose', 'eof', 'reset', 'fin'):
 +            local(tls+'-'+mode, mode=mode, tls=tls)
 +    # Public controls use the runner's system trust unchanged. Both settings run
 +    # even if one fails, so a connection failure cannot be mislabeled validation.

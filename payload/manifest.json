@@ -2,8 +2,8 @@
   "base_repository": "https://gitlab.com/ACTom/source",
   "base_commit": "56900cd3a58b32cf3c0f8a3b48443a139bab8e0d",
   "source_branch": "feature/native-tls-smart-sockets",
-  "patch_sha256": "c7e741f9ac36d65ee501d0885045a4a199b48a382e58a460844ef8137719018c",
-  "scope": "Windows Schannel/selector plus pure Pascal Network.framework prototype and HTTP factory; Darwin compile/runtime pending",
+  "patch_sha256": "e2f32b760fd8efd08a9e8d406ca5ae17c3ba6b38bbe44da1358402194837dcea",
+  "scope": "Windows Schannel/selector; pure Pascal Network.framework plus HTTP seam, Darwin build/link and real TLS observed; strict FIN unresolved",
   "windows_validation": {
     "package_build_exit": 0,
     "offline_runner_exit": 0,
@@ -18,11 +18,11 @@
     "current_evidence": "pure-pascal-integrated-native/results.log; packages-pure-pascal-full.log"
   },
   "not_run": [
-    "Darwin pure Pascal conditional branch compilation/linking",
-    "macOS native TLS/trust/hostname/late callbacks",
     "real GnuTLS",
     "OpenSSL1.1.1",
-    "Win32/ARM64/older Windows/Schannel TLS1.3"
+    "Win32/ARM64/older Windows/Schannel TLS1.3",
+    "older macOS runtime, Darwin sanitizer/leaks beyond context counters",
+    "strict Network.framework bare-FIN rejection unresolved"
   ],
   "ci_orchestration": "ACTom/fpc-macos-ci only; excluded from FPC source patch",
   "first_ci_scope": "two standard macOS jobs, manual, 15min each; API and production C construction only, no TCP/TLS access; authorized once",
@@ -82,5 +82,25 @@
     "counting": "unique workflow ID summed run_attempt, matrix once",
     "maximum": 20,
     "owner_authorized": true
-  }
+  },
+  "darwin_rounds": [
+    {
+      "round": 4,
+      "run_id": 37338838447,
+      "carrier_commit": "2770bcdabbf8f3b449261f9303ac1d90d0a70479",
+      "both_architectures": "native compile/construction/imports/all packages pass; standalone include path fail"
+    },
+    {
+      "round": 5,
+      "run_id": 37340068774,
+      "carrier_commit": "3a8cf603f614ed62418ed4ef02b702fc99bd150b",
+      "both_architectures": {
+        "build_models_race": "pass",
+        "tls_cases": 48,
+        "passed": 39,
+        "failed": 9
+      },
+      "diagnosis": "7 harness assertions corrected; 2 genuine bare-FIN failures"
+    }
+  ]
 }
