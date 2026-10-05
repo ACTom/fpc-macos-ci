@@ -1,15 +1,16 @@
-# Proposed official Darwin bootstrap and one bounded run
+# Official Darwin bootstrap and bounded manual validation
 
-The owner approved this exact temporary bootstrap and one additional manual
-run. Before dispatch, no bootstrap binary has been downloaded/executed locally.
+The owner first approved this temporary bootstrap and one manual preflight,
+then expanded authorization to at most20 cumulative workflow executions. Seven
+have completed, all run_attempt=1. README.md records each historical outcome.
+The initial preflight excluded TCP/TLS; subsequent explicitly authorized runs
+add native TLS/HTTP fixtures after build and model stages succeed.
 
-Approved scope: download/extract/run the official FPC 3.2.2 bootstrap only
-inside the ephemeral runner's RUNNER_TEMP, then one manual workflow dispatch on
-the existing macos-15-intel and macos-15 standard runners, at most 30 minutes
-per job. There are no automatic reruns. This first stage covers compiler/RTL,
-Blocks, pure Pascal native compilation/linking/imports/construction and, if
-those pass, package integration and portable models. It starts no native TCP
-connection and does not establish TLS/trust/hostname/lifetime acceptance.
+Current scope: download/extract/run the official FPC 3.2.2 bootstrap only
+inside the ephemeral runner's RUNNER_TEMP on existing macos-15-intel and
+macos-15 standard runners, at most30 minutes per job. There are no automatic
+reruns. Each diagnosed repeat requires exact reviewed remote/local SHA. No
+bootstrap binary is installed or executed locally on the Windows host.
 
 ## Fixed inputs
 
@@ -19,9 +20,9 @@ connection and does not establish TLS/trust/hostname/lifetime acceptance.
 - [FPC's official download page](https://www.freepascal.org/down/i386/macosx.html)
   links to the [official SourceForge release directory](https://sourceforge.net/projects/freepascal/files/Mac%20OS%20X/3.2.2/).
   Use fpc-3.2.2.intelarm64-macosx.dmg, listed as 274.2 MB for Intel and ARM64.
-- The 2021 release notes qualify macOS only through 11.x. Compatibility with
-  the current macOS15 runners and Xcode SDK is unproven and must pass a bootstrap
-  hello program before the source build. The source requires 3.2.2 or 3.2.0;
+- The 2021 release notes qualify macOS only through 11.x. Both current macOS15
+  runners now pass the bootstrap hello and branch build; every run still requires
+  a successful hello before the source build. The source requires 3.2.2 or 3.2.0;
   do not override its version check.
 - No independently verified published SHA256 is available from this inspection.
   Record the final download URL/headers and actual SHA256; that hash provides
@@ -58,8 +59,8 @@ including system.ppu. Compile/run a hello program using -n, that explicit -Fu,
 the existing xcrun macOS SDK via -XR, and existing linker/binutils via -FD.
 Preserve the branch defaults: -WM10.8 for x86_64, -WM11.0 for arm64. Stop on
 loader, extraction, linker or hello failures; do not provision Rosetta or bypass
-OS policy. The package has not yet been inventoried, so those paths are not
-claimed to be known.
+OS policy. The second run inventoried the package and native compiler/RTL paths;
+the current script derives and checks the unique paths on each fresh runner.
 
 Export FPC_BOOTSTRAP_COMPILER and FPC_BOOTSTRAP_UNITS for ci/preflight.sh. The
 current script already accepts these inputs. The explicitly gated ci/bootstrap.sh now implements temporary extraction and
@@ -92,11 +93,12 @@ global FPC configuration, account settings, Gatekeeper/SIP changes or paid
 runner is part of this proposal. The repository's own Darwin build may use its
 existing local binary signing/compare machinery; no keychain identity is needed.
 
-Real TLS acceptance follows separately: trusted/invalid DNS/IP certificates,
+Real TLS acceptance now follows successful build/model stages: trusted/invalid certificates,
 Verify=False behavior, fragmented large data, HTTP connection counts/keep-alive,
 timeouts and FIN without close_notify. Native lifetime tests must keep processes
 alive and observe context destruction after late state/send/receive completion;
-the current short close wait alone cannot prove eventual release or no leaks.
+tests now allow five seconds for tracked context drain; those counters do not
+prove absence of all system allocations or substitute for sanitizer evidence.
 
 ## Official bootstrap preflight outcome
 
@@ -115,9 +117,13 @@ were found on both architectures. No compiler was installed globally.
 The bootstrap script incorrectly passed `lipo -verify_arch <arch> <file>`;
 lipo treated the trailing filename as another architecture and exited 1.
 The correction is `lipo <file> -verify_arch <arch>`, following the actual tool's
-usage. It is prepared and shell syntax checked, not revalidated on macOS.
-Version/target queries, bootstrap hello, compiler cycle/RTL, branch Blocks,
-native compile/link/construction/imports and package/models were NOT RUN.
-No native TLS connection occurred. Only the single newly authorized dispatch
-was made; no automatic or manual retry followed this failure. Text evidence
-was retained for each architecture. Existing Windows evidence remains unchanged.
+usage. Later diagnosed runs validate this correction, bootstrap hello, branch
+compiler/RTL, Blocks, native linking and full packages on both architectures.
+In this historical second run the later stages were NOT RUN and no native TLS
+connection occurred. Subsequent repeats used expanded owner authorization;
+there were no automatic reruns. Text evidence was retained per architecture.
+
+The latest seventh run passes56 of58 acceptance cases on each architecture,
+with strict bare FIN rejection still failed. Its four separate diagnostics
+observe identical closure fields after proper close_notify and bare FIN. See
+README.md and the source macos-transport.md for the pending owner decision.

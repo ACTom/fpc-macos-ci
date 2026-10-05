@@ -916,10 +916,10 @@ index 0000000000..9cb6da8afe
 +include ../build/Makefile.pkg
 diff --git a/packages/fcl-tls/README.md b/packages/fcl-tls/README.md
 new file mode 100644
-index 0000000000..f5823f6312
+index 0000000000..68297727f1
 --- /dev/null
 +++ b/packages/fcl-tls/README.md
-@@ -0,0 +1,198 @@
+@@ -0,0 +1,202 @@
 +# Client TLS selection and native Windows TLS
 +
 +This increment adds a Windows Schannel client and an opt-in `smartsslsockets`
@@ -1111,19 +1111,23 @@ index 0000000000..f5823f6312
 +The pure Pascal provider, TLS stream/handler and fphttpclient pre-TCP factory
 +are implemented without a C object dependency. Proxy/HTTPS Unix sockets/native
 +SSE extraction and unsupported native TLS options fail explicitly. Portable
-+models pass on Windows (HTTP 40, handler 22, stream 20); the shared callback
-+model reports zero leaks. These are not macOS compile or TLS evidence.
-+The Darwin prototype remains behind FPC_NETWORK_FRAMEWORK_NATIVE and mandatory
-+system-symbol detection. Required Apple ABI/link/lifetime/trust tests and the
-+official bootstrap proposal are documented in the
-+[macOS adapter](docs/macos-transport.md) and separate
-+[test carrier](https://github.com/ACTom/fpc-macos-ci). No further CI was started.
++models pass on Windows (HTTP 46, handler 22, stream 20); the shared callback
++model releases all 146 tracked contexts. Windows models supply no Apple runtime
++evidence. The Darwin prototype remains behind FPC_NETWORK_FRAMEWORK_NATIVE and
++mandatory system-symbol detection. On macOS 15.7.9, native builds and 56 of 58
++real TLS acceptance cases pass independently on x86_64 and arm64. Both failures
++are bare TCP FIN without close_notify: the public receive signals observed in
++these tests match clean TLS closure. HTTP rejects incomplete Content-Length and
++chunk framing; close-delimited completeness remains unresolved. See the
++[macOS adapter](docs/macos-transport.md) for exact evidence and the pending
++compatibility decision, and the separate
++[test carrier](https://github.com/ACTom/fpc-macos-ci) for reproducible manual CI.
 diff --git a/packages/fcl-tls/docs/macos-transport.md b/packages/fcl-tls/docs/macos-transport.md
 new file mode 100644
-index 0000000000..00d7b1409b
+index 0000000000..536fde61f5
 --- /dev/null
 +++ b/packages/fcl-tls/docs/macos-transport.md
-@@ -0,0 +1,215 @@
+@@ -0,0 +1,262 @@
 +# Pure Pascal Network.framework client prototype
 +
 +The connection layer, SSL handler and fphttpclient connection factory are now
@@ -1319,10 +1323,11 @@ index 0000000000..00d7b1409b
 +command; package compilation itself passed.
 +
 +Run 37340068774 adds those declared include paths and native TLS fixtures.
-+Its first ARM results establish actual Pascal HTTPS, False/True behavior and
-+pending-context release. Strict TCP FIN rejection fails because the native
-+framework returns clean EOF. Final per-architecture acceptance results must be
-+read independently; Windows tests supply no Apple runtime evidence.
++Both architectures pass build/model/race stages and 39 of 48 real TLS cases.
++Seven failures concern harness assertions (the omitted certificate code -9808
++and veto error text); later runs verify those corrections. Two genuine strict
++TCP FIN failures remain because the framework reports error-free EOF. Windows
++tests supply no Apple runtime evidence.
 +
 +Run 37341698834 (carrier17895de7599c1c2f73bb5deab7ff65f605f0e566) passed all
 +build/model stages and 50 of52 native TLS acceptance cases independently on
@@ -1331,14 +1336,60 @@ index 0000000000..00d7b1409b
 +with explicit TLS certificate errors when True and succeed when False. Read,
 +send-pressure and handshake deadlines, HTTP keepalive, 1MiB echo, concurrent
 +cancellation and context-drain observations pass. These counts are not general
-+system leak or sanitizer evidence. SDK15.5 public headers expose receive
-+completion/context/error but no matched close_notify status API; a detailed
-+native callback and delayed-state observation is prepared for the next run.
++system leak or sanitizer evidence. SDK 15.5 public headers expose receive
++completion/context/error, but the inspected public Network/Security declarations
++contain no matched close_notify status API.
 +
-+The next payload adds HTTP incomplete Content-Length/chunk guards and separate
-+FIN/clean-close diagnostics. Diagnostics are labeled separately and never satisfy
-+the strict FIN rejection cases. Experimental enablement remains required; no
-+architecture replacement or lower closure promise is approved implicitly.
++[Run 37345498651](https://github.com/ACTom/fpc-macos-ci/actions/runs/37345498651)
++tests carrier aeab39ed6134f5078a2f02e2c05bc474e4ca7198 and patch SHA256
++2368ca71688b9c30363ab2d6589f7ebe3bc9a1471e3011760a4cfe930f0a2412.
++Both architectures pass build/model/race stages and 56 of 58 acceptance cases;
++only TLS 1.2/1.3 bare FIN rejection fails. Six new HTTP cases pass: incomplete
++Content-Length and chunked bodies reject, and complete chunks succeed, under
++each TLS version. Four additional closure diagnostics are reported separately
++and do not satisfy the strict FIN cases. Seven workflows have run, all with
++run_attempt=1; the approved cumulative ceiling is 20.
++
++## Observed receive closure semantics
++
++The seventh run records the raw callback fields before local cancellation and
++repeats Read after 500 ms. On both architectures, under both TLS versions:
++
++| Terminal observation | Proper close_notify | Bare TCP FIN |
++| --- | --- | --- |
++| Read, including delayed repeat | 0 | 0 |
++| is_complete / context present / context final | True / True / True | True / True / True |
++| content data present / native error present | False / False | False / False |
++| error domain / code | 0 / 0 | 0 / 0 |
++| last state / number of state events | ready / 2 | ready / 2 |
++
++The proper-close fixture delivers `abc` before closing, so it has one extra data
++callback. That callback count cannot authenticate TLS closure. The original
++strict FIN rejection cases still fail; no adapter error is fabricated.
++
++Apple's [receive completion contract](https://developer.apple.com/documentation/network/nw_connection_receive_completion_t)
++and [final-context API](https://developer.apple.com/documentation/network/nw_content_context_get_is_final(_:))
++describe completion and read closure, without promising a close_notify verdict.
++The installed SDK 15.5 comment explicitly identifies TCP FIN as a read close.
++The audited public Security metadata/options declarations expose peer and
++negotiation information; no closure-alert query was found. Combined with the
++recorded runtime results, these inputs provide no reliable distinction in this
++implementation on macOS 15.7.9. This is not a claim about every future API or OS.
++
++[RFC 8446 section 6.1](https://www.rfc-editor.org/rfc/rfc8446.html#section-6.1)
++explains the missing completeness assurance after transport closure without
++close_notify. [RFC 9112 section 9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.8)
++permits a complete self-delimited HTTP response despite incomplete TLS closure,
++but requires a valid closure alert to establish completeness of a response with
++neither Content-Length nor chunked framing. The new HTTP guard supplies the
++self-delimited check; it does not settle the close-delimited case.
++
++An owner decision is pending before changing compatibility or architecture:
++retain Network.framework with strict rejection of close-delimited HTTPS and an
++explicit raw-stream EOF limitation; deliver Windows/selection with Mac still
++experimental; or evaluate a separate pure Pascal Secure Transport backend and
++its TLS-version/deprecation limits. No route is applied implicitly. Native
++activation remains gated, and current EOF is not proof of authenticated closure.
 diff --git a/packages/fcl-tls/docs/openssl-eof.md b/packages/fcl-tls/docs/openssl-eof.md
 new file mode 100644
 index 0000000000..475c795980
@@ -1436,10 +1487,10 @@ index 0000000000..475c795980
 +- [OpenSSL s_client diagnostics](https://docs.openssl.org/3.5/man1/openssl-s_client/)
 diff --git a/packages/fcl-tls/docs/validation.md b/packages/fcl-tls/docs/validation.md
 new file mode 100644
-index 0000000000..cc2e89efe2
+index 0000000000..4343a488b3
 --- /dev/null
 +++ b/packages/fcl-tls/docs/validation.md
-@@ -0,0 +1,309 @@
+@@ -0,0 +1,320 @@
 +# Windows increment validation
 +
 +Recorded on 2026-10-05 against base commit
@@ -1460,8 +1511,9 @@ index 0000000000..cc2e89efe2
 +  The test process temporarily sets `SSL_CERT_FILE`; it restores the prior value
 +  and does not modify the Windows certificate store.
 +- Build/test outputs are outside the source tree in the task's `tls-build`
-+  directory. `packages-final.log` and `final-results/results.log` are the final
-+  build and test logs; earlier runs remain in separately named directories.
++  directory. Each dated checkpoint below names its own build and test logs;
++  `packages-final.log` and `final-results/results.log` describe the initial
++  Windows increment rather than the subsequent HTTP/native integration.
 +
 +Use [../tests/run.ps1](../tests/run.ps1) and the commands in
 +[../README.md](../README.md) to reproduce. Without `-Online`, only deterministic
@@ -1719,12 +1771,12 @@ index 0000000000..cc2e89efe2
 +The bootstrap script incorrectly passed `lipo -verify_arch <arch> <file>`;
 +lipo treated the trailing filename as another architecture and exited 1.
 +The correction is `lipo <file> -verify_arch <arch>`, following the actual tool's
-+usage. It is prepared and shell syntax checked, not revalidated on macOS.
-+Version/target queries, bootstrap hello, compiler cycle/RTL, branch Blocks,
-+native compile/link/construction/imports and package/models were NOT RUN.
-+No native TLS connection occurred. Only the single newly authorized dispatch
-+was made; no automatic or manual retry followed this failure. Text evidence
-+was retained for each architecture. Existing Windows evidence remains unchanged.
++usage. Subsequent diagnosed runs validate the corrected bootstrap hello on
++both architectures. In this historical second run, version/target queries,
++bootstrap hello, compiler cycle/RTL, Blocks, native compilation and later stages
++were NOT RUN; no native TLS connection occurred. The later runs below used the
++owner's expanded cumulative authorization, with no automatic retries. Text
++evidence was retained for each architecture.
 +
 +## HTTP framing fix and current Darwin acceptance
 +
@@ -1737,18 +1789,28 @@ index 0000000000..cc2e89efe2
 +http-framing-integrated suite passes87 local real TLS tests and all model/state
 +checks, but exits1 because TemporaryDirectory cleanup could not delete a copied
 +exe after all17 loader cases passed. The targeted loader run uses a new optional
-+--output fresh directory to retain fixtures for inspection; its result is recorded
-+separately without discarding the initial cleanup failure.
++--output fresh directory to retain fixtures for inspection. Its separate
++http-framing-loader-retained.log exits0: all17 loader cases and50 competing
++binding initializations pass. The original full-run cleanup failure remains
++recorded; the targeted pass does not change that full-run exit code.
 +
 +Run37341698834 tests carrier17895de on macOS15.7.9/SDK15.5. Each architecture
 +passes build/models/native race and50 of52 real TLS cases. Only bare FIN without
 +close_notify fails, in TLS1.2 and1.3. Certificate classification and application
 +veto assertion corrections are verified. Both True and False public controls,
 +1MiB fragmentation, keepalive, read/send/handshake deadlines, concurrent Close and
-+context release have actual native evidence. The following run will separately
-+verify the HTTP framing fix and native receive/state inputs. CI attempts so far
-+are six unique workflow IDs with one attempt each; two jobs count once. No strict
-+FIN test is redefined as a passing diagnostic.
++context release have actual native evidence.
++
++[Run37345498651](https://github.com/ACTom/fpc-macos-ci/actions/runs/37345498651)
++tests carrier aeab39ed6134f5078a2f02e2c05bc474e4ca7198. Both architectures pass
++all build/model/race stages and56 of58 acceptance cases. All six new HTTP
++framing cases pass, including short Content-Length and chunk rejection. Only
++the two bare FIN rejection cases fail. Four separate diagnostics show identical
++terminal receive/state fields after clean TLS close and bare FIN, including a
++repeat Read after500ms. See macos-transport.md for the raw fields, primary API
++contracts and the pending owner decision. Overall workflow conclusion remains
++failure. CI usage is7 of20 cumulative executions, all run_attempt=1; the matrix
++counts once. No strict FIN test is redefined as a passing diagnostic.
 diff --git a/packages/fcl-tls/fpmake.pp b/packages/fcl-tls/fpmake.pp
 new file mode 100644
 index 0000000000..37e9fb5bf9
@@ -1879,18 +1941,19 @@ index 0000000000..2a7fff99db
 +src/networkframeworksslsockets.pp=namespaced/System.Net.NetworkFrameworkSSLSockets.pp
 diff --git a/packages/fcl-tls/src/networkframeworkapi.pp b/packages/fcl-tls/src/networkframeworkapi.pp
 new file mode 100644
-index 0000000000..40d4349dfe
+index 0000000000..2fb393f4df
 --- /dev/null
 +++ b/packages/fcl-tls/src/networkframeworkapi.pp
-@@ -0,0 +1,212 @@
+@@ -0,0 +1,213 @@
 +{ Part of FCL; see COPYING.FPC.
 +  Minimal C API declarations for a pure Pascal Network.framework transport.
 +  Blocks are FPC cblocks, not ordinary cdecl procedure pointers. Declarations
 +  follow Apple's documented APIs and Security/libdispatch primary headers.
-+  Pending: exact target SDK comparison, Darwin link/ABI and runtime validation.
++  SDK 15.5 comparison and macOS 15.7.9 link/ABI/runtime checks ran on both
++  x86_64 and arm64. Older runtime settings and strict TLS closure remain gaps.
 +  Production requires macOS x86_64/arm64 and the normal Darwin Blocks RTL.
-+  Existing compiler defaults (10.8 x86_64, 11.0 arm64) include that runtime;
-+  generated blockrtl ISA imports still require a real Mach-O link audit.
++  Audited minimums remain the compiler defaults (10.8 x86_64, 11.0 arm64);
++  that link audit does not establish runtime support on older systems.
 +  No Network/Security framework is linked strongly or unloaded after use. }
 +{$IFNDEF FPC_DOTTEDUNITS}
 +unit networkframeworkapi;
@@ -2133,10 +2196,10 @@ index 0000000000..92d5553a00
 +end.
 diff --git a/packages/fcl-tls/src/networkframeworknative.pp b/packages/fcl-tls/src/networkframeworknative.pp
 new file mode 100644
-index 0000000000..00db796d69
+index 0000000000..3f7a42c9b0
 --- /dev/null
 +++ b/packages/fcl-tls/src/networkframeworknative.pp
-@@ -0,0 +1,931 @@
+@@ -0,0 +1,932 @@
 +{ Part of FCL; see COPYING.FPC.
 +  Pure Pascal Network.framework client TCP+TLS provider. No C object dependency.
 +  Callback methods belong to an explicitly retained context, never the stream.
@@ -2146,8 +2209,9 @@ index 0000000000..00db796d69
 +  Close wakes a concurrent caller and releases its one owner reference; each
 +  caller must separately retain a captured context until its call returns.
 +  Unix programs must load cthreads first. Serialization is provided by the caller.
-+  Pending: exact Apple SDK declarations, Darwin x86_64/arm64 build/link, native
-+  callback ABI, foreign-thread RTL, trust, cancellation and sanitizer validation.
++  macOS 15.7.9 x86_64/arm64 tests cover build/link, callbacks, trust,
++  cancellation and tracked context release. Bare FIN is still error-free EOF;
++  strict authenticated closure, older systems and sanitizer checks remain gaps.
 +  Shared Windows tests are state/ABI models only, not Apple runtime evidence. }
 +{$IFNDEF FPC_DOTTEDUNITS}
 +unit networkframeworknative;

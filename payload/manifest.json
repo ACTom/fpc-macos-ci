@@ -2,20 +2,27 @@
   "base_repository": "https://gitlab.com/ACTom/source",
   "base_commit": "56900cd3a58b32cf3c0f8a3b48443a139bab8e0d",
   "source_branch": "feature/native-tls-smart-sockets",
-  "patch_sha256": "2368ca71688b9c30363ab2d6589f7ebe3bc9a1471e3011760a4cfe930f0a2412",
+  "patch_sha256": "d81c7667b59aaf40a85e4081ffb9899e61259ce4baa3abde6ee0c24811816422",
   "scope": "Windows Schannel/selector; pure Pascal Network.framework plus HTTP seam, Darwin build/link and real TLS observed; strict FIN unresolved",
   "windows_validation": {
     "package_build_exit": 0,
-    "offline_runner_exit": 0,
     "real_local_tls_cases": 87,
     "native_online_exit": 1,
     "native_online_failure": "expired.badssl.com early TCP truncation; not counted as certificate rejection",
     "network_framework_pascal_model_cases": 20,
     "standalone_model_bootstrap": "FPC 3.2.2 Windows passed; not Darwin/whole-branch evidence",
-    "http_connection_model_checks": 40,
+    "http_connection_model_checks": 46,
     "native_handler_model_checks": 22,
     "native_state_model_unfreed_blocks": 0,
-    "current_evidence": "pure-pascal-integrated-native/results.log; packages-pure-pascal-full.log"
+    "current_evidence": "packages-http-framing.log; http-framing-integrated/results.log; http-framing-loader-retained.log",
+    "latest_package_build_exit": 0,
+    "latest_offline_runner_exit": 1,
+    "latest_offline_failure": "TemporaryDirectory cleanup WinError5 after all87 local TLS and17 loader checks passed",
+    "targeted_loader_exit": 0,
+    "targeted_loader_checks": 17,
+    "targeted_binding_initializers": 50,
+    "prior_all_pass_evidence": "pure-pascal-integrated-native/results.log; packages-pure-pascal-full.log",
+    "prior_offline_runner_exit": 0
   },
   "not_run": [
     "real GnuTLS",
@@ -75,15 +82,24 @@
       "package/model integration",
       "native TLS"
     ],
-    "fix": "lipo input path before -verify_arch; shell syntax checked, no macOS retry",
+    "fix": "lipo input path before -verify_arch; validated by subsequent bootstrap hello and branch builds on both architectures",
     "authorized_dispatches": 1
   },
   "ci_limit": {
     "counting": "unique workflow ID summed run_attempt, matrix once",
     "maximum": 20,
-    "owner_authorized": true
+    "owner_authorized": true,
+    "used": 7,
+    "all_run_attempts": 1,
+    "latest_run_id": 37345498651
   },
   "darwin_rounds": [
+    {
+      "round": 3,
+      "run_id": 37336482398,
+      "carrier_commit": "f776a35da947a2c2b59dfabb43b696a2cd0466d7",
+      "both_architectures": "bootstrap hello, compiler/RTL and Blocks pass; native Assigned(cblock) compilation fails"
+    },
     {
       "round": 4,
       "run_id": 37338838447,
@@ -101,6 +117,46 @@
         "failed": 9
       },
       "diagnosis": "7 harness assertions corrected; 2 genuine bare-FIN failures"
+    },
+    {
+      "round": 6,
+      "run_id": 37341698834,
+      "carrier_commit": "17895de7599c1c2f73bb5deab7ff65f605f0e566",
+      "both_architectures": {
+        "build_models_race": "pass",
+        "tls_cases": 52,
+        "passed": 50,
+        "failed": 2
+      },
+      "failed_cases": [
+        "tls12-fin",
+        "tls13-fin"
+      ]
+    },
+    {
+      "round": 7,
+      "run_id": 37345498651,
+      "carrier_commit": "aeab39ed6134f5078a2f02e2c05bc474e4ca7198",
+      "tested_patch_sha256": "2368ca71688b9c30363ab2d6589f7ebe3bc9a1471e3011760a4cfe930f0a2412",
+      "both_architectures": {
+        "build_models_race": "pass",
+        "tls_cases": 58,
+        "passed": 56,
+        "failed": 2,
+        "diagnostic_only": 4
+      },
+      "failed_cases": [
+        "tls12-fin",
+        "tls13-fin"
+      ],
+      "http_framing_cases": 6,
+      "closure_observation": "proper close_notify and bare FIN have matching terminal callback fields and repeated Read EOF at500ms; no reliable closure-alert distinction observed"
     }
-  ]
+  ],
+  "pending_owner_decision": "Network.framework with strict framed-HTTP requirement and raw EOF limitation; Windows/selector delivery with Mac experimental; or separate Secure Transport evaluation",
+  "delivery_evidence": {
+    "latest_tested_carrier_commit": "aeab39ed6134f5078a2f02e2c05bc474e4ca7198",
+    "latest_tested_patch_sha256": "2368ca71688b9c30363ab2d6589f7ebe3bc9a1471e3011760a4cfe930f0a2412",
+    "changes_after_latest_test": "evidence documentation and opening source comments only; production statements and tests unchanged; no extra dispatch needed"
+  }
 }

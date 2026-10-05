@@ -29,7 +29,9 @@ Pascal clients assert no third-party TLS binding is loaded.
 | [37332944563](https://github.com/ACTom/fpc-macos-ci/actions/runs/37332944563) | Download/image validation/extraction passed; lipo argument order failed. |
 | [37336482398](https://github.com/ACTom/fpc-macos-ci/actions/runs/37336482398) | Bootstrap hello, branch compiler/RTL and Blocks passed; Assigned(cblock) native compile failed. |
 | [37338838447](https://github.com/ACTom/fpc-macos-ci/actions/runs/37338838447) | Native compile/construction/context drain/import audit and all packages passed; standalone BSD include path failed. |
-| [37340068774](https://github.com/ACTom/fpc-macos-ci/actions/runs/37340068774) | All build/model/race stages passed; 39 of 48 real TLS cases passed on each architecture. Seven assertion failures are corrected. Two bare FIN failures remain genuine. |
+| [37340068774](https://github.com/ACTom/fpc-macos-ci/actions/runs/37340068774) | All build/model/race stages passed; 39 of 48 real TLS cases passed on each architecture. Seven assertion failures were corrected. Two bare FIN failures remain genuine. |
+| [37341698834](https://github.com/ACTom/fpc-macos-ci/actions/runs/37341698834) | All build/model/race stages passed; 50 of 52 TLS cases passed per architecture. Send/handshake deadlines and corrected assertions pass; two bare FIN failures remain. |
+| [37345498651](https://github.com/ACTom/fpc-macos-ci/actions/runs/37345498651) | All build/model/race stages passed; 56 of 58 TLS cases passed per architecture. Six HTTP framing cases pass. Two strict FIN failures remain; four separate diagnostics show matching clean-close/FIN signals. |
 
 Both architectures ran macOS15.7.9, Xcode16.4/SDK15.5. Native Mach-O minimums
 remain 10.8 (x86_64) and 11.0 (arm64), with no strong Network/Security or
@@ -46,12 +48,27 @@ TLS verification or converts generic network failures into certificate passes.
 
 Network.framework reports a bare TCP FIN without close_notify as error-free EOF
 on this OS. That strict test remains failed. The source backend stays opt-in;
-no default-enable claim is made while this limitation is unresolved. The next
-round checks corrected assertions, send/handshake deadlines and installed SDK
-public declarations. Full per-case results.json and stage logs are retained.
+no default-enable claim is made while this limitation is unresolved. The seventh
+run observes matching terminal fields for proper TLS close and bare FIN, even
+after a 500ms delayed Read, under both TLS versions on both architectures.
+Content-Length/chunked truncation now rejects explicitly. Close-delimited HTTP
+and the raw stream's closure assurance require the owner's compatibility or
+architecture decision. The public API/SDK inspection found no reliable closure
+alert query in the interfaces used here. Full results.json and stage logs are
+retained; diagnostic success does not satisfy strict truncation acceptance.
 
-Windows evidence remains separate: full packages and offline suite passed,
-including 87 real local TLS cases and loader/binding/SSPI/HTTP/stream models.
+Seven workflows have run, each run_attempt=1, for cumulative usage 7/20. Current
+payload documentation may include later evidence-only edits; round7 tested
+carrier aeab39ed6134f5078a2f02e2c05bc474e4ca7198 and patch SHA256
+2368ca71688b9c30363ab2d6589f7ebe3bc9a1471e3011760a4cfe930f0a2412.
+
+Windows evidence remains separate: earlier complete offline suite passed with
+87 real local TLS cases and loader/binding/SSPI/HTTP/stream models. The latest
+HTTP framing package build and all 46 HTTP models pass. Its complete runner
+passes all TLS cases but exits1 at a TemporaryDirectory cleanup permission
+error after 17 loader checks passed; a targeted retained-directory loader run
+exits0 with all17 and50 competing initializers. That does not erase the full
+runner cleanup failure.
 Public Windows expired.badssl early truncation remains a failure. Real GnuTLS,
 OpenSSL1.1.1 and other Windows architectures/versions are untested.
 
