@@ -1,0 +1,52 @@
+name: FPC macOS native TLS preflight
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: fpc-native-tls-macos-preflight
+  cancel-in-progress: false
+jobs:
+  preflight:
+    name: macOS ${{ matrix.arch }} API and patch preflight
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x86_64
+          - runner: macos-15
+            arch: arm64
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+      - name: Verify fixed payload and apply against its FPC baseline
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 ci/verify_payload.py
+          base="$(python3 -c 'import json; print(json.load(open("payload/manifest.json"))["base_commit"])')"
+          mkdir -p "$RUNNER_TEMP/fpc-source"
+          curl --fail --location --retry 1 --connect-timeout 20 --max-time 180 \
+            "https://gitlab.com/ACTom/source/-/archive/$base/source-$base.tar.gz" \
+            --output "$RUNNER_TEMP/fpc-source.tar.gz"
+          tar -xzf "$RUNNER_TEMP/fpc-source.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/fpc-source"
+          cd "$RUNNER_TEMP/fpc-source"
+          git apply --check "$GITHUB_WORKSPACE/payload/native-tls.patch"
+          git apply "$GITHUB_WORKSPACE/payload/native-tls.patch"
+      - name: Compile and construct Network.framework objects using the installed SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/ci/preflight.sh" "$RUNNER_TEMP/fpc-source" \
+            "$RUNNER_TEMP/fpc-macos-preflight" '${{ matrix.arch }}' 2>&1 | tee "$RUNNER_TEMP/preflight.log"
+      - name: Summarize scope
+        if: always()
+        shell: bash
+        run: |
+          printf '%s\n' 'This run checks payload applicability, Apple API/Blocks compilation and object construction.' \
+            'It is not FPC native HTTPS/trust/hostname/lifetime acceptance.' >> "$GITHUB_STEP_SUMMARY"

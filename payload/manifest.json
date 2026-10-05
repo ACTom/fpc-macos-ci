@@ -1,0 +1,21 @@
+{
+  "base_repository": "https://gitlab.com/ACTom/source",
+  "base_commit": "56900cd3a58b32cf3c0f8a3b48443a139bab8e0d",
+  "source_branch": "feature/native-tls-smart-sockets",
+  "patch_sha256": "e0829325eaaf52842a9cee36ed48e04e32ba259befcff75a1974e3cfebfe694f",
+  "scope": "Windows native TLS, selector, verification compatibility fix, macOS API construction preflight",
+  "windows_validation": {
+    "package_build_exit": 0,
+    "offline_runner_exit": 0,
+    "real_local_tls_cases": 87,
+    "native_online_exit": 1,
+    "native_online_failure": "expired.badssl.com early TCP truncation; not counted as certificate rejection"
+  },
+  "not_run": [
+    "real GnuTLS",
+    "OpenSSL1.1.1",
+    "macOS FPC backend or native HTTPS",
+    "CI before first-run approval"
+  ],
+  "ci_orchestration": "ACTom/fpc-macos-ci only; excluded from FPC source patch"
+}

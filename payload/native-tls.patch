@@ -1,0 +1,3941 @@
+diff --git a/packages/fcl-net/fpmake.pp b/packages/fcl-net/fpmake.pp
+index 2ae1c646b7..19444f209a 100644
+--- a/packages/fcl-net/fpmake.pp
++++ b/packages/fcl-net/fpmake.pp
+@@ -66,6 +66,12 @@
+         end;
+     T.ResourceStrings := True;
+ 
++    // Windows native, client-only TLS. Other socket backends remain separate.
++    T:=P.Targets.AddUnit('schannelsspi.pp',[win32,win64]);
++    T:=P.Targets.AddUnit('schannelsslsockets.pp',[win32,win64]);
++    T.Dependencies.AddUnit('schannelsspi');
++    T.Dependencies.AddUnit('sslsockets');
++
+     // HTTP Client
+     T:=P.Targets.AddUnit('fpsock.pp',[linux,freebsd,netbsd,openbsd,dragonfly]);
+       with T.Dependencies do
+diff --git a/packages/fcl-net/namespaced/System.Net.SchannelSSLSockets.pp b/packages/fcl-net/namespaced/System.Net.SchannelSSLSockets.pp
+new file mode 100644
+index 0000000000..3495fbc3ed
+--- /dev/null
++++ b/packages/fcl-net/namespaced/System.Net.SchannelSSLSockets.pp
+@@ -0,0 +1,3 @@
++unit System.Net.SchannelSSLSockets;
++{$DEFINE FPC_DOTTEDUNITS}
++{$i schannelsslsockets.pp}
+diff --git a/packages/fcl-net/namespaced/WinApi.SchannelSSPI.pp b/packages/fcl-net/namespaced/WinApi.SchannelSSPI.pp
+new file mode 100644
+index 0000000000..6d0cf5b65d
+--- /dev/null
++++ b/packages/fcl-net/namespaced/WinApi.SchannelSSPI.pp
+@@ -0,0 +1,3 @@
++unit WinApi.SchannelSSPI;
++{$DEFINE FPC_DOTTEDUNITS}
++{$i schannelsspi.pp}
+diff --git a/packages/fcl-net/namespaces.lst b/packages/fcl-net/namespaces.lst
+index 2e4bcb13d4..485f1924e4 100644
+--- a/packages/fcl-net/namespaces.lst
++++ b/packages/fcl-net/namespaces.lst
+@@ -8,4 +8,6 @@ src/cnetdb.pp=namespaced/System.Net.Cnetdb.pp
+ src/netdb.pp=namespaced/System.Net.Netdb.pp
+ src/ssockets.pp=namespaced/System.Net.Ssockets.pp
+ src/fpsock.pp=namespaced/System.Net.Fpsock.pp
+-src/fpsockets.pp=namespaced/System.Net.FPSockets.pp
+\ No newline at end of file
++src/fpsockets.pp=namespaced/System.Net.FPSockets.pp
++src/schannelsspi.pp=namespaced/WinApi.SchannelSSPI.pp
++src/schannelsslsockets.pp=namespaced/System.Net.SchannelSSLSockets.pp
+diff --git a/packages/fcl-net/src/schannelsslsockets.pp b/packages/fcl-net/src/schannelsslsockets.pp
+new file mode 100644
+index 0000000000..526520574c
+--- /dev/null
++++ b/packages/fcl-net/src/schannelsslsockets.pp
+@@ -0,0 +1,538 @@
++{
++    This file is part of the Free Component Library (FCL).
++    Windows Schannel client TLS support for ssockets.
++    See COPYING.FPC for details about the copyright.
++}
++{$IFNDEF FPC_DOTTEDUNITS}
++unit schannelsslsockets;
++{$ENDIF}
++{$mode objfpc}{$H+}
++interface
++{$IFDEF FPC_DOTTEDUNITS}
++uses System.Classes, System.SysUtils, WinApi.Windows, WinApi.WinSock2,
++  System.Net.Ssockets, System.Net.Sslsockets, System.Net.Sslbase, WinApi.SchannelSSPI;
++{$ELSE}
++uses Classes, SysUtils, Windows, WinSock2, ssockets, sslsockets, sslbase, schannelsspi;
++{$ENDIF}
++type
++  TSchannelSocketHandler = class(TSSLSocketHandler)
++  private
++    FCredential, FContext: TSecHandle;
++    FHaveCredential, FHaveContext, FPeerShutdown, FFailed: Boolean;
++    FSizes: TSecStreamSizes;
++    FEncrypted, FPlain: TBytes;
++    FPlainOffset: SizeInt;
++    FTarget: UnicodeString;
++    FServerName: String;
++    FErrorCode: Integer;
++    FErrorText: String;
++    function Fail(Code: Integer; const Operation: String): Boolean;
++    function Deadline(Timeout: Integer): QWord;
++    function WaitSocket(Writing: Boolean; UntilTime: QWord): Boolean;
++    function SendRaw(Data: Pointer; Count: Integer; UntilTime: QWord): Boolean;
++    function ReadMore(UntilTime: QWord): Boolean;
++    function Handshake(UntilTime: QWord; Initial: Boolean): Boolean;
++    procedure KeepExtra(const Buffers: array of TSecBuffer);
++    procedure ReleaseContext;
++    function RecvUntil(const Buffer; Count: Integer; UntilTime: QWord): Integer;
++  protected
++    function GetLastSSLErrorString: String; override;
++    function GetLastSSLErrorCode: Integer; override;
++  public
++    destructor Destroy; override;
++    function CreateCertGenerator: TX509Certificate; override;
++    function Connect: Boolean; override;
++    function Accept: Boolean; override;
++    function Close: Boolean; override;
++    function Shutdown(BiDirectional: Boolean): Boolean; override;
++    function Send(const Buffer; Count: Integer): Integer; override;
++    function Recv(const Buffer; Count: Integer): Integer; override;
++    function BytesAvailable: Integer; override;
++    function Select(Check: TSocketStates; Timeout: Integer): TSocketStates; override;
++    // Optional authenticated peer name when TCP connects to an IP or a tunnel.
++    // An empty value authenticates TInetSocket.NetworkAddress.Address.
++    property ServerName: String read FServerName write FServerName;
++  end;
++implementation
++const
++  // A full TLS record plus handshake fragmentation, bounded against hostile input.
++  MaxEncryptedBuffer = 262144;
++  ContextFlags = ISC_REQ_REPLAY_DETECT or ISC_REQ_SEQUENCE_DETECT or
++    ISC_REQ_CONFIDENTIALITY or ISC_REQ_ALLOCATE_MEMORY or
++    ISC_REQ_EXTENDED_ERROR or ISC_REQ_STREAM;
++
++procedure BufferDesc(out Desc: TSecBufferDesc; var Buffers: array of TSecBuffer);
++begin
++  FillChar(Desc,SizeOf(Desc),0);
++  Desc.Count:=Length(Buffers);
++  Desc.Buffers:=@Buffers[0];
++end;
++
++function TSchannelSocketHandler.CreateCertGenerator: TX509Certificate;
++begin
++  // Client-only backend: construction never loads a third party library.
++  Result:=nil;
++end;
++
++destructor TSchannelSocketHandler.Destroy;
++begin
++  ReleaseContext;
++  inherited Destroy;
++end;
++
++procedure TSchannelSocketHandler.ReleaseContext;
++begin
++  SetSSLActive(False);
++  if FHaveContext then DeleteSecurityContext(@FContext);
++  if FHaveCredential then FreeCredentialsHandle(@FCredential);
++  FHaveContext:=False;
++  FHaveCredential:=False;
++  FillChar(FContext,SizeOf(FContext),0);
++  FillChar(FCredential,SizeOf(FCredential),0);
++  FEncrypted:=nil;
++  FPlain:=nil;
++  FPlainOffset:=0;
++end;
++
++function TSchannelSocketHandler.Fail(Code: Integer; const Operation: String): Boolean;
++begin
++  FErrorCode:=Code;
++  FErrorText:=Operation+' (0x'+IntToHex(Cardinal(Code),8)+')';
++  FLastError:=Code;
++  FFailed:=True;
++  SetSSLActive(False);
++  Result:=False;
++end;
++
++function TSchannelSocketHandler.GetLastSSLErrorString: String;
++begin Result:=FErrorText end;
++function TSchannelSocketHandler.GetLastSSLErrorCode: Integer;
++begin Result:=FErrorCode end;
++
++function TSchannelSocketHandler.Deadline(Timeout: Integer): QWord;
++begin
++  if Timeout>0 then Result:=GetTickCount64+QWord(Timeout) else Result:=0;
++end;
++
++function TSchannelSocketHandler.WaitSocket(Writing: Boolean; UntilTime: QWord): Boolean;
++var
++  FDS: TFDSet;
++  TV: TTimeVal;
++  PTV: PTimeVal;
++  Remaining, NowTime: QWord;
++  R: Integer;
++begin
++  FillChar(FDS,SizeOf(FDS),0);
++  FD_Set(Socket.Handle,FDS);
++  PTV:=nil;
++  if UntilTime<>0 then
++    begin
++    NowTime:=GetTickCount64;
++    if NowTime>=UntilTime then Exit(Fail(WSAETIMEDOUT,'TLS I/O timeout'));
++    Remaining:=UntilTime-NowTime;
++    TV.tv_sec:=Remaining div 1000;
++    TV.tv_usec:=(Remaining mod 1000)*1000;
++    PTV:=@TV;
++    end;
++  if Writing then R:={$IFDEF FPC_DOTTEDUNITS}WinApi.{$ENDIF}WinSock2.Select(0,nil,@FDS,nil,PTV)
++  else R:={$IFDEF FPC_DOTTEDUNITS}WinApi.{$ENDIF}WinSock2.Select(0,@FDS,nil,nil,PTV);
++  if R=0 then Exit(Fail(WSAETIMEDOUT,'TLS I/O timeout'));
++  if R<0 then Exit(Fail(WSAGetLastError,'TLS socket select'));
++  Result:=True;
++end;
++
++function TSchannelSocketHandler.SendRaw(Data: Pointer; Count: Integer; UntilTime: QWord): Boolean;
++var N, Error: Integer;
++begin
++  while Count>0 do
++    begin
++    if not WaitSocket(True,UntilTime) then Exit(False);
++    N:={$IFDEF FPC_DOTTEDUNITS}WinApi.{$ENDIF}WinSock2.Send(Socket.Handle,Data^,Count,0);
++    if N=SOCKET_ERROR then
++      begin
++      Error:=WSAGetLastError;
++      if Error=WSAEWOULDBLOCK then Continue;
++      Exit(Fail(Error,'TLS socket send'));
++      end;
++    if N=0 then Exit(Fail(WSAECONNRESET,'TLS socket send returned zero'));
++    Inc(PByte(Data),N);
++    Dec(Count,N);
++    end;
++  Result:=True;
++end;
++
++function TSchannelSocketHandler.ReadMore(UntilTime: QWord): Boolean;
++var
++  Chunk: array[0..16383] of Byte;
++  N, OldSize, Error: Integer;
++begin
++  repeat
++  if not WaitSocket(False,UntilTime) then Exit(False);
++  N:={$IFDEF FPC_DOTTEDUNITS}WinApi.{$ENDIF}WinSock2.Recv(Socket.Handle,Chunk,SizeOf(Chunk),0);
++  if N=SOCKET_ERROR then
++    begin
++    Error:=WSAGetLastError;
++    if Error<>WSAEWOULDBLOCK then Exit(Fail(Error,'TLS socket receive'));
++    end;
++  until N<>SOCKET_ERROR;
++  // A TCP EOF without TLS close_notify is truncation, never a clean TLS EOF.
++  if N=0 then Exit(Fail(SEC_E_ILLEGAL_MESSAGE,'TLS connection truncated without close_notify'));
++  OldSize:=Length(FEncrypted);
++  if OldSize+N>MaxEncryptedBuffer then Exit(Fail(SEC_E_ILLEGAL_MESSAGE,'TLS input buffer limit'));
++  SetLength(FEncrypted,OldSize+N);
++  Move(Chunk,FEncrypted[OldSize],N);
++  Result:=True;
++end;
++
++procedure TSchannelSocketHandler.KeepExtra(const Buffers: array of TSecBuffer);
++var I, N: Integer;
++begin
++  N:=0;
++  for I:=0 to High(Buffers) do
++    if Buffers[I].BufferType=SECBUFFER_EXTRA then N:=Buffers[I].Size;
++  if (N>0) and (N<=Length(FEncrypted)) then
++    Move(FEncrypted[Length(FEncrypted)-N],FEncrypted[0],N);
++  SetLength(FEncrypted,N);
++end;
++
++function TSchannelSocketHandler.Handshake(UntilTime: QWord; Initial: Boolean): Boolean;
++var
++  Input: array[0..1] of TSecBuffer;
++  Output: array[0..0] of TSecBuffer;
++  ID, OD: TSecBufferDesc;
++  IP: PSecBufferDesc;
++  CP: PSecHandle;
++  Attr: Cardinal;
++  Status: TSecurityStatus;
++  NeedRead: Boolean;
++begin
++  // Schannel may consume an entire post-handshake message and return
++  // SEC_I_RENEGOTIATE without EXTRA. Re-enter ISC before reading more bytes.
++  NeedRead:=False;
++  repeat
++    if NeedRead and not ReadMore(UntilTime) then Exit(False);
++    FillChar(Input,SizeOf(Input),0);
++    FillChar(Output,SizeOf(Output),0);
++    BufferDesc(ID,Input);
++    BufferDesc(OD,Output);
++    IP:=nil;
++    CP:=nil;
++    if not Initial then
++      begin
++      CP:=@FContext;
++      Input[0].BufferType:=SECBUFFER_TOKEN;
++      Input[0].Size:=Length(FEncrypted);
++      if Length(FEncrypted)>0 then Input[0].Data:=@FEncrypted[0];
++      IP:=@ID;
++      end;
++    Output[0].BufferType:=SECBUFFER_TOKEN;
++    Status:=InitializeSecurityContextW(@FCredential,CP,PWideChar(FTarget),
++      ContextFlags,0,0,IP,0,@FContext,@OD,@Attr,nil);
++    if (Status=SEC_E_OK) or (Status=SEC_I_CONTINUE_NEEDED) then FHaveContext:=True;
++    try
++      if (Output[0].Size>0) and ((Status=SEC_E_OK) or (Status=SEC_I_CONTINUE_NEEDED)) then
++        if not SendRaw(Output[0].Data,Output[0].Size,UntilTime) then Exit(False);
++    finally
++      if Output[0].Data<>nil then FreeContextBuffer(Output[0].Data);
++    end;
++    if Status=SEC_E_INCOMPLETE_MESSAGE then
++      begin NeedRead:=True; Continue end;
++    if (Status<>SEC_E_OK) and (Status<>SEC_I_CONTINUE_NEEDED) then
++      Exit(Fail(Status,'Schannel handshake / system certificate validation'));
++    if not Initial then KeepExtra(Input);
++    Initial:=False;
++    NeedRead:=Length(FEncrypted)=0;
++  until Status=SEC_E_OK;
++  if (Attr and ISC_REQ_CONFIDENTIALITY)=0 then
++    Exit(Fail(SEC_E_ILLEGAL_MESSAGE,'Schannel did not negotiate confidentiality'));
++  Status:=QueryContextAttributesW(@FContext,SECPKG_ATTR_STREAM_SIZES,@FSizes);
++  if Status<>SEC_E_OK then Exit(Fail(Status,'Schannel stream sizes'));
++  if (FSizes.MaximumMessage=0) or (FSizes.MaximumMessage>65536) or
++     (FSizes.Header+FSizes.Trailer>65536) then
++    Exit(Fail(SEC_E_INTERNAL_ERROR,'Invalid Schannel stream sizes'));
++  Result:=True;
++end;
++
++function TSchannelSocketHandler.Connect: Boolean;
++var
++  Modern: TSchCredentials;
++  Legacy: TSchannelCred;
++  Status: TSecurityStatus;
++  NonBlocking: Cardinal;
++  T: Integer;
++begin
++  CheckSocket;
++  ReleaseContext;
++  FFailed:=False;
++  FPeerShutdown:=False;
++  FErrorCode:=0;
++  FLastError:=0;
++  FErrorText:='';
++  Result:=False;
++  if not (Socket is TInetSocket) then
++    Exit(Fail(SEC_E_UNSUPPORTED_FUNCTION,'Schannel requires TInetSocket'));
++  if not CertificateData.Certificate.Empty or not CertificateData.PrivateKey.Empty or
++     not CertificateData.CertCA.Empty or not CertificateData.TrustedCertificate.Empty or
++     not CertificateData.PFX.Empty or (CertificateData.TrustedCertsDir<>'') or
++     (CertificateData.ALPNProtocols<>'') or (CertificateData.CipherList<>'DEFAULT') or
++     not SendHostAsSNI then
++    Exit(Fail(SEC_E_UNSUPPORTED_FUNCTION,'Schannel custom credentials, trust, cipher list or ALPN are unsupported'));
++  if not (SSLType in [stAny,stTLSv1_2]) then
++    Exit(Fail(SEC_E_UNSUPPORTED_FUNCTION,'Schannel legacy protocol selection is unsupported'));
++  if FServerName<>'' then FTarget:=UTF8Decode(FServerName)
++  else FTarget:=UTF8Decode(TInetSocket(Socket).NetworkAddress.Address);
++  if (FTarget='') or (Pos(#0,FTarget)>0) then
++    Exit(Fail(SEC_E_ILLEGAL_MESSAGE,'Schannel target hostname is empty or contains NUL'));
++  if FTarget[Length(FTarget)]='.' then Delete(FTarget,Length(FTarget),1);
++  if FTarget='' then Exit(Fail(SEC_E_ILLEGAL_MESSAGE,'Schannel target hostname is empty'));
++  FillChar(Modern,SizeOf(Modern),0);
++  Modern.Version:=SCH_CREDENTIALS_VERSION;
++  // Honor the existing handler option without changing OS policy or TLS
++  // protocols. The application callback remains a post-handshake veto.
++  Modern.Flags:=SCH_CRED_NO_DEFAULT_CREDS or SCH_USE_STRONG_CRYPTO;
++  if VerifyPeerCert then
++    Modern.Flags:=Modern.Flags or SCH_CRED_AUTO_CRED_VALIDATION
++  else
++    Modern.Flags:=Modern.Flags or SCH_CRED_MANUAL_CRED_VALIDATION or SCH_CRED_NO_SERVERNAME_CHECK;
++  Status:=SEC_E_UNSUPPORTED_FUNCTION;
++  if SSLType=stAny then
++    Status:=AcquireCredentialsHandleW(nil,'Microsoft Unified Security Protocol Provider',
++      SECPKG_CRED_OUTBOUND,nil,@Modern,nil,nil,@FCredential,nil);
++  // Feature detection occurs before connecting TLS, never after a certificate
++  // or handshake failure. V4 permits older systems to use their enabled TLS.
++  if (Status=SEC_E_UNSUPPORTED_FUNCTION) or (Status=SEC_E_UNKNOWN_CREDENTIALS) or
++     (Status=SEC_E_INVALID_TOKEN) then
++    begin
++    FillChar(Legacy,SizeOf(Legacy),0);
++    Legacy.Version:=SCHANNEL_CRED_VERSION;
++    Legacy.Flags:=Modern.Flags;
++    if SSLType=stTLSv1_2 then Legacy.EnabledProtocols:=SP_PROT_TLS1_2_CLIENT;
++    Status:=AcquireCredentialsHandleW(nil,'Microsoft Unified Security Protocol Provider',
++      SECPKG_CRED_OUTBOUND,nil,@Legacy,nil,nil,@FCredential,nil);
++    end;
++  if Status<>SEC_E_OK then Exit(Fail(Status,'Schannel acquire credentials'));
++  FHaveCredential:=True;
++  T:=Socket.ConnectTimeout;
++  if T<=0 then T:=Socket.IOTimeout;
++  NonBlocking:=1;
++  if ioctlsocket(Socket.Handle,LongInt(FIONBIO),@NonBlocking)<>0 then
++    Exit(Fail(WSAGetLastError,'TLS nonblocking transport'));
++  Result:=Handshake(Deadline(T),True);
++  if Result then
++    begin
++    Result:=DoVerifyCert;
++    if not Result then Fail(SEC_E_ILLEGAL_MESSAGE,'Certificate rejected by application');
++    end;
++  SetSSLActive(Result);
++  if not Result then ReleaseContext;
++end;
++
++function TSchannelSocketHandler.Accept: Boolean;
++begin
++  Result:=Fail(SEC_E_UNSUPPORTED_FUNCTION,'Schannel socket handler is client-only');
++end;
++
++function TSchannelSocketHandler.Send(const Buffer; Count: Integer): Integer;
++var
++  Data: TBytes;
++  Buffers: array[0..3] of TSecBuffer;
++  Desc: TSecBufferDesc;
++  Status: TSecurityStatus;
++  I, N, Total: Integer;
++  UntilTime: QWord;
++begin
++  Result:=-1;
++  if not SSLActive or FFailed then Exit;
++  if Count<=0 then Exit(0);
++  UntilTime:=Deadline(Socket.IOTimeout);
++  Total:=0;
++  while Total<Count do
++    begin
++    N:=Count-Total;
++    if Cardinal(N)>FSizes.MaximumMessage then N:=FSizes.MaximumMessage;
++    SetLength(Data,FSizes.Header+N+FSizes.Trailer);
++    Move((PByte(@Buffer)+Total)^,Data[FSizes.Header],N);
++    FillChar(Buffers,SizeOf(Buffers),0);
++    BufferDesc(Desc,Buffers);
++    Buffers[0].BufferType:=SECBUFFER_STREAM_HEADER;
++    Buffers[0].Size:=FSizes.Header;
++    Buffers[0].Data:=@Data[0];
++    Buffers[1].BufferType:=SECBUFFER_DATA;
++    Buffers[1].Size:=N;
++    Buffers[1].Data:=@Data[FSizes.Header];
++    Buffers[2].BufferType:=SECBUFFER_STREAM_TRAILER;
++    Buffers[2].Size:=FSizes.Trailer;
++    Buffers[2].Data:=@Data[FSizes.Header+N];
++    Status:=EncryptMessage(@FContext,0,@Desc,0);
++    if Status<>SEC_E_OK then begin Fail(Status,'Schannel encrypt'); Exit end;
++    for I:=0 to 2 do
++      if not SendRaw(Buffers[I].Data,Buffers[I].Size,UntilTime) then Exit;
++    Inc(Total,N);
++    end;
++  Result:=Total;
++end;
++
++function TSchannelSocketHandler.Recv(const Buffer; Count: Integer): Integer;
++begin
++  CheckSocket;
++  Result:=RecvUntil(Buffer,Count,Deadline(Socket.IOTimeout));
++end;
++
++function TSchannelSocketHandler.RecvUntil(const Buffer; Count: Integer; UntilTime: QWord): Integer;
++var
++  Buffers: array[0..3] of TSecBuffer;
++  Desc: TSecBufferDesc;
++  Status: TSecurityStatus;
++  I, N: Integer;
++begin
++  Result:=-1;
++  if Count<=0 then Exit(0);
++  if FPeerShutdown and (BytesAvailable=0) then Exit(0);
++  if not SSLActive or FFailed then Exit;
++  while BytesAvailable=0 do
++    begin
++    if (Length(FEncrypted)=0) and not ReadMore(UntilTime) then Exit;
++    FillChar(Buffers,SizeOf(Buffers),0);
++    BufferDesc(Desc,Buffers);
++    Buffers[0].BufferType:=SECBUFFER_DATA;
++    Buffers[0].Size:=Length(FEncrypted);
++    Buffers[0].Data:=@FEncrypted[0];
++    Status:=DecryptMessage(@FContext,@Desc,0,nil);
++    if Status=SEC_E_INCOMPLETE_MESSAGE then
++      begin if not ReadMore(UntilTime) then Exit; Continue end;
++    if (Status<>SEC_E_OK) and (Status<>SEC_I_RENEGOTIATE) and
++       (Status<>SEC_I_CONTEXT_EXPIRED) then
++      begin Fail(Status,'Schannel decrypt'); Exit end;
++    // SSPI may return plaintext together with renegotiation or close_notify.
++    // Preserve it before consuming EXTRA or changing the context state.
++    for I:=0 to High(Buffers) do
++      if (Buffers[I].BufferType=SECBUFFER_DATA) and (Buffers[I].Size>0) then
++        begin
++        N:=Length(FPlain);
++        SetLength(FPlain,N+Buffers[I].Size);
++        Move(Buffers[I].Data^,FPlain[N],Buffers[I].Size);
++        end;
++    KeepExtra(Buffers);
++    if Status=SEC_I_RENEGOTIATE then
++      begin
++      if not Handshake(UntilTime,False) then Exit;
++      if not DoVerifyCert then
++        begin Fail(SEC_E_ILLEGAL_MESSAGE,'Certificate rejected by application'); Exit end;
++      end;
++    if Status=SEC_I_CONTEXT_EXPIRED then
++      begin
++      FPeerShutdown:=True;
++      if BytesAvailable=0 then Exit(0);
++      end;
++    end;
++  N:=BytesAvailable;
++  if N>Count then N:=Count;
++  Move(FPlain[FPlainOffset],PByte(@Buffer)^,N);
++  Inc(FPlainOffset,N);
++  if FPlainOffset=Length(FPlain) then
++    begin FPlain:=nil; FPlainOffset:=0 end;
++  Result:=N;
++end;
++
++function TSchannelSocketHandler.BytesAvailable: Integer;
++begin
++  Result:=Length(FPlain)-FPlainOffset;
++end;
++
++function TSchannelSocketHandler.Select(Check: TSocketStates; Timeout: Integer): TSocketStates;
++var
++  ReadSet, WriteSet, ErrorSet: TFDSet;
++  ReadPtr, WritePtr, ErrorPtr: PFDSet;
++  TV: TTimeVal;
++  TVPtr: PTimeVal;
++  R: Integer;
++  procedure Prepare(var FDSet: TFDSet; out Ptr: PFDSet; State: TSocketState);
++  begin
++    Ptr:=nil;
++    if State in Check then
++      begin
++      FillChar(FDSet,SizeOf(FDSet),0);
++      FD_Set(Socket.Handle,FDSet);
++      Ptr:=@FDSet;
++      end;
++  end;
++begin
++  CheckSocket;
++  Result:=[];
++  if (sosCanRead in Check) and ((BytesAvailable>0) or
++     (Length(FEncrypted)>0) or FPeerShutdown or FFailed) then
++    begin
++    Include(Result,sosCanRead);
++    Exclude(Check,sosCanRead);
++    Timeout:=0;
++    end;
++  if Check=[] then Exit;
++  Prepare(ReadSet,ReadPtr,sosCanRead);
++  Prepare(WriteSet,WritePtr,sosCanWrite);
++  Prepare(ErrorSet,ErrorPtr,sosException);
++  TVPtr:=nil;
++  if Timeout>=0 then
++    begin
++    TV.tv_sec:=Timeout div 1000;
++    TV.tv_usec:=(Timeout mod 1000)*1000;
++    TVPtr:=@TV;
++    end;
++  R:={$IFDEF FPC_DOTTEDUNITS}WinApi.{$ENDIF}WinSock2.Select(0,ReadPtr,WritePtr,ErrorPtr,TVPtr);
++  if R<0 then FLastError:=WSAGetLastError else FLastError:=0;
++  if R>0 then
++    begin
++    if (ReadPtr<>nil) and FD_IsSet(Socket.Handle,ReadSet) then Include(Result,sosCanRead);
++    if (WritePtr<>nil) and FD_IsSet(Socket.Handle,WriteSet) then Include(Result,sosCanWrite);
++    if (ErrorPtr<>nil) and FD_IsSet(Socket.Handle,ErrorSet) then Include(Result,sosException);
++    end;
++end;
++
++function TSchannelSocketHandler.Shutdown(BiDirectional: Boolean): Boolean;
++var
++  Token: Cardinal;
++  Input, Output: array[0..0] of TSecBuffer;
++  ID, OD: TSecBufferDesc;
++  Attr: Cardinal;
++  Status: TSecurityStatus;
++  UntilTime: QWord;
++  Discard: array[0..1023] of Byte;
++begin
++  Result:=True;
++  try
++    if not FHaveContext or FFailed then Exit;
++    UntilTime:=Deadline(Socket.IOTimeout);
++    // Closing must not block forever when no I/O timeout was configured.
++    if UntilTime=0 then UntilTime:=Deadline(2000);
++    Token:=SCHANNEL_SHUTDOWN;
++    FillChar(Input,SizeOf(Input),0);
++    BufferDesc(ID,Input);
++    Input[0].BufferType:=SECBUFFER_TOKEN;
++    Input[0].Size:=SizeOf(Token);
++    Input[0].Data:=@Token;
++    Status:=ApplyControlToken(@FContext,@ID);
++    if Status<>SEC_E_OK then Exit(Fail(Status,'Schannel shutdown token'));
++    FillChar(Output,SizeOf(Output),0);
++    BufferDesc(OD,Output);
++    Output[0].BufferType:=SECBUFFER_TOKEN;
++    Status:=InitializeSecurityContextW(@FCredential,@FContext,PWideChar(FTarget),
++      ContextFlags,0,0,nil,0,@FContext,@OD,@Attr,nil);
++    try
++      if (Status<>SEC_E_OK) and (Status<>SEC_I_CONTEXT_EXPIRED) then
++        Exit(Fail(Status,'Schannel shutdown'));
++      if Output[0].Size>0 then
++        if not SendRaw(Output[0].Data,Output[0].Size,UntilTime) then Exit(False);
++    finally
++      if Output[0].Data<>nil then FreeContextBuffer(Output[0].Data);
++    end;
++    if BiDirectional then
++      while not FPeerShutdown do
++        if RecvUntil(Discard,SizeOf(Discard),UntilTime)<0 then Exit(False);
++  finally ReleaseContext end;
++end;
++
++function TSchannelSocketHandler.Close: Boolean;
++begin Result:=Shutdown(False) end;
++
++initialization
++  TSSLSocketHandler.SetDefaultHandlerClass(TSchannelSocketHandler);
++end.
+diff --git a/packages/fcl-net/src/schannelsspi.pp b/packages/fcl-net/src/schannelsspi.pp
+new file mode 100644
+index 0000000000..f52219d286
+--- /dev/null
++++ b/packages/fcl-net/src/schannelsspi.pp
+@@ -0,0 +1,113 @@
++{
++    This file is part of the Free Component Library (FCL).
++    Minimal Windows SSPI/Schannel declarations used by schannelsslsockets.
++    See COPYING.FPC for details about the copyright.
++}
++{$IFNDEF FPC_DOTTEDUNITS}
++unit schannelsspi;
++{$ENDIF}
++{$mode objfpc}{$H+}
++{$packrecords c}
++interface
++{$IFNDEF WINDOWS}{$fatal Schannel is available on Windows only}{$ENDIF}
++type
++  TSecurityStatus = LongInt;
++  TSecHandle = record
++    Lower, Upper: PtrUInt;
++  end;
++  PSecHandle = ^TSecHandle;
++  TSecBuffer = record
++    Size, BufferType: Cardinal;
++    Data: Pointer;
++  end;
++  PSecBuffer = ^TSecBuffer;
++  TSecBufferDesc = record
++    Version, Count: Cardinal;
++    Buffers: PSecBuffer;
++  end;
++  PSecBufferDesc = ^TSecBufferDesc;
++  TSecStreamSizes = record
++    Header, Trailer, MaximumMessage, Buffers, BlockSize: Cardinal;
++  end;
++  TSchannelCred = record
++    Version, CredCount: Cardinal;
++    Creds, RootStore: Pointer;
++    MapperCount: Cardinal;
++    Mappers: Pointer;
++    AlgorithmCount: Cardinal;
++    Algorithms: Pointer;
++    EnabledProtocols, MinCipherStrength, MaxCipherStrength,
++      SessionLifespan, Flags, CredFormat: Cardinal;
++  end;
++  TSchCredentials = record
++    Version, CredFormat, CredCount: Cardinal;
++    Creds, RootStore: Pointer;
++    MapperCount: Cardinal;
++    Mappers: Pointer;
++    SessionLifespan, Flags, TLSParameterCount: Cardinal;
++    TLSParameters: Pointer;
++  end;
++
++const
++  SEC_E_OK = 0;
++  SEC_I_CONTINUE_NEEDED = $00090312;
++  SEC_I_CONTEXT_EXPIRED = $00090317;
++  SEC_I_RENEGOTIATE = $00090321;
++  SEC_E_UNSUPPORTED_FUNCTION = LongInt($80090302);
++  SEC_E_INTERNAL_ERROR = LongInt($80090304);
++  SEC_E_INVALID_TOKEN = LongInt($80090308);
++  SEC_E_UNKNOWN_CREDENTIALS = LongInt($8009030D);
++  SEC_E_INCOMPLETE_MESSAGE = LongInt($80090318);
++  SEC_E_ILLEGAL_MESSAGE = LongInt($80090326);
++  SECBUFFER_EMPTY = 0;
++  SECBUFFER_DATA = 1;
++  SECBUFFER_TOKEN = 2;
++  SECBUFFER_EXTRA = 5;
++  SECBUFFER_STREAM_TRAILER = 6;
++  SECBUFFER_STREAM_HEADER = 7;
++  SECPKG_ATTR_STREAM_SIZES = 4;
++  SECPKG_CRED_OUTBOUND = 2;
++  ISC_REQ_REPLAY_DETECT = $00000004;
++  ISC_REQ_SEQUENCE_DETECT = $00000008;
++  ISC_REQ_CONFIDENTIALITY = $00000010;
++  ISC_REQ_ALLOCATE_MEMORY = $00000100;
++  ISC_REQ_EXTENDED_ERROR = $00004000;
++  ISC_REQ_STREAM = $00008000;
++  SCH_CRED_NO_DEFAULT_CREDS = $00000010;
++  SCH_CRED_AUTO_CRED_VALIDATION = $00000020;
++  SCH_CRED_MANUAL_CRED_VALIDATION = $00000008;
++  SCH_CRED_NO_SERVERNAME_CHECK = $00000004;
++  SCH_USE_STRONG_CRYPTO = $00400000;
++  SCHANNEL_SHUTDOWN = 1;
++  SCHANNEL_CRED_VERSION = 4;
++  SCH_CREDENTIALS_VERSION = 5;
++  SP_PROT_TLS1_2_CLIENT = $00000800;
++
++function AcquireCredentialsHandleW(Principal, PackageName: PWideChar;
++  Use: Cardinal; LogonID, AuthData, GetKey, GetKeyArg: Pointer;
++  Credential: PSecHandle; Expiry: Pointer): TSecurityStatus; stdcall;
++  external 'secur32.dll' name 'AcquireCredentialsHandleW';
++function InitializeSecurityContextW(Credential, Context: PSecHandle;
++  Target: PWideChar; Requirements, Reserved1, DataRep: Cardinal;
++  Input: PSecBufferDesc; Reserved2: Cardinal; NewContext: PSecHandle;
++  Output: PSecBufferDesc; Attributes: PCardinal; Expiry: Pointer): TSecurityStatus; stdcall;
++  external 'secur32.dll' name 'InitializeSecurityContextW';
++function QueryContextAttributesW(Context: PSecHandle; Attribute: Cardinal;
++  Buffer: Pointer): TSecurityStatus; stdcall;
++  external 'secur32.dll' name 'QueryContextAttributesW';
++function EncryptMessage(Context: PSecHandle; QOP: Cardinal;
++  Message: PSecBufferDesc; Sequence: Cardinal): TSecurityStatus; stdcall;
++  external 'secur32.dll' name 'EncryptMessage';
++function DecryptMessage(Context: PSecHandle; Message: PSecBufferDesc;
++  Sequence: Cardinal; QOP: PCardinal): TSecurityStatus; stdcall;
++  external 'secur32.dll' name 'DecryptMessage';
++function ApplyControlToken(Context: PSecHandle; Input: PSecBufferDesc): TSecurityStatus; stdcall;
++  external 'secur32.dll' name 'ApplyControlToken';
++function FreeContextBuffer(Buffer: Pointer): TSecurityStatus; stdcall;
++  external 'secur32.dll' name 'FreeContextBuffer';
++function DeleteSecurityContext(Context: PSecHandle): TSecurityStatus; stdcall;
++  external 'secur32.dll' name 'DeleteSecurityContext';
++function FreeCredentialsHandle(Credential: PSecHandle): TSecurityStatus; stdcall;
++  external 'secur32.dll' name 'FreeCredentialsHandle';
++implementation
++end.
+diff --git a/packages/fcl-net/src/sslsockets.pp b/packages/fcl-net/src/sslsockets.pp
+index 34e74be892..5f90d25b3a 100644
+--- a/packages/fcl-net/src/sslsockets.pp
++++ b/packages/fcl-net/src/sslsockets.pp
+@@ -36,6 +36,7 @@ interface
+   TSSLSocketHandler = class;
+   TVerifyCertificateEvent = Procedure(Sender : TObject; var Allow : Boolean) of object;
+   TSSLSocketHandlerClass = class of TSSLSocketHandler;
++  TSSLSocketHandlerFactory = function: TSSLSocketHandlerClass;
+ 
+   { TSSLSocketHandler }
+ 
+@@ -55,6 +56,7 @@   TSSLSocketHandler = class(TSocketHandler)
+     procedure SetString(AIndex: Integer; const AValue: string);
+   Private
+     Class Var FDefaultHandlerClass : TSSLSocketHandlerClass;
++    Class Var FDefaultHandlerFactory : TSSLSocketHandlerFactory;
+   protected
+     Procedure SetSSLActive(aValue : Boolean);
+     function DoVerifyCert: boolean; virtual;  // if event define's change not acceptable, suggest to set virtual
+@@ -66,6 +68,10 @@   TSSLSocketHandler = class(TSocketHandler)
+     Function GetLastErrorDescription : String;override;
+     // Class factory methods
+     Class Procedure SetDefaultHandlerClass(aClass : TSSLSocketHandlerClass);
++    // Registration is performed before starting worker threads. Factories must
++    // synchronize their own lazy initialization. Explicit class registration
++    // clears any factory, preserving the existing last-registration behavior.
++    Class Procedure SetDefaultHandlerFactory(aFactory : TSSLSocketHandlerFactory);
+     Class Function GetDefaultHandlerClass : TSSLSocketHandlerClass;
+     Class Function GetDefaultHandler : TSSLSocketHandler;
+     // Socket methods
+@@ -106,7 +112,7 @@ implementation
+     'No SSL Socket support compiled in.'+sLineBreak+
+     'Please include opensslsockets unit in program and recompile it.';
+   SErrNoX509Certificate =
+-    'Cannot create a X509 certificate without SLL support';
++    'Cannot create a X509 certificate without SSL support';
+   SSSLErrorCode = 'SSL error code: %d';
+ 
+ { TSSLSocketHandler }
+@@ -158,7 +164,8 @@ procedure TSSLSocketHandler.SetString(AIndex: Integer; const AValue: string);
+     1 : FCertificateData.CipherList:=AValue;
+     2 : begin
+         FCertificateData.HostName:=AValue;
+-        FCertGenerator.HostName:=aValue;
++        if Assigned(FCertGenerator) then
++          FCertGenerator.HostName:=aValue;
+         end;
+   end;
+ end;
+@@ -208,19 +215,31 @@ function TSSLSocketHandler.GetLastErrorDescription: String;
+ 
+ class procedure TSSLSocketHandler.SetDefaultHandlerClass(aClass: TSSLSocketHandlerClass);
+ begin
++  FDefaultHandlerFactory:=nil;
+   FDefaultHandlerClass:=aClass;
+ end;
+ 
++class procedure TSSLSocketHandler.SetDefaultHandlerFactory(aFactory: TSSLSocketHandlerFactory);
++begin
++  FDefaultHandlerFactory:=aFactory;
++end;
++
+ class function TSSLSocketHandler.GetDefaultHandlerClass: TSSLSocketHandlerClass;
+ begin
+-  Result:=FDefaultHandlerClass;
++  if Assigned(FDefaultHandlerFactory) then
++    Result:=FDefaultHandlerFactory()
++  else
++    Result:=FDefaultHandlerClass;
+ end;
+ 
+ class function TSSLSocketHandler.GetDefaultHandler: TSSLSocketHandler;
++var
++  HandlerClass: TSSLSocketHandlerClass;
+ begin
+-  if FDefaultHandlerClass=Nil then
++  HandlerClass:=GetDefaultHandlerClass;
++  if HandlerClass=Nil then
+     Raise ESSLSocketError.Create(SErrNoSSLSupport);
+-  Result:=FDefaultHandlerClass.Create;
++  Result:=HandlerClass.Create;
+ end;
+ 
+ function TSSLSocketHandler.CreateCertificateData: TCertificateData;
+@@ -239,6 +258,8 @@ function TSSLSocketHandler.CreateSelfSignedCertificate: Boolean;
+   CK:TCertAndKey;
+ 
+ begin
++  if not Assigned(CertGenerator) then
++    Raise ESSLSocketError.Create(SErrNoX509Certificate);
+   CK:=CertGenerator.CreateCertificateAndKey;
+   CertificateData.Certificate.Value:=CK.Certificate;
+   CertificateData.PrivateKey.Value:=CK.PrivateKey;
+diff --git a/packages/fcl-tls/Makefile b/packages/fcl-tls/Makefile
+new file mode 100644
+index 0000000000..9cb6da8afe
+--- /dev/null
++++ b/packages/fcl-tls/Makefile
+@@ -0,0 +1,2 @@
++PACKAGE_NAME=fcl-tls
++include ../build/Makefile.pkg
+diff --git a/packages/fcl-tls/README.md b/packages/fcl-tls/README.md
+new file mode 100644
+index 0000000000..06cedef856
+--- /dev/null
++++ b/packages/fcl-tls/README.md
+@@ -0,0 +1,180 @@
++# Client TLS selection and native Windows TLS
++
++This increment adds a Windows Schannel client and an opt-in `smartsslsockets`
++unit. It targets this FPC 3.3.1 source branch. macOS native TLS remains a design
++in [docs/macos-transport.md](docs/macos-transport.md); it is not implemented.
++
++```pascal
++uses fphttpclient, smartsslsockets;
++var Client: TFPHTTPClient;
++begin
++  Client:=TFPHTTPClient.Create(nil);
++  try
++    Client.VerifySSLCertificate:=True;
++    Writeln(Client.Get('https://example.com/'));
++  finally Client.Free end;
++end.
++```
++
++On Windows, with no supported TLS DLL alongside the executable, this uses
++Schannel and, with verification enabled, Windows certificate trust without a third party TLS DLL.
++`schannelsslsockets` can also be used directly in place of `smartsslsockets`.
++
++## Selection contract
++
++Selection happens on the first `TSSLSocketHandler.GetDefaultHandlerClass` or
++`GetDefaultHandler` call. The selected class and any failure are cached under a
++critical section; later calls do not retry loading or change providers.
++
++1. A supported application-directory OpenSSL pair takes priority.
++2. If no pair member exists, application-directory GnuTLS is considered.
++3. If neither exists, Windows selects Schannel. Other platforms report that no
++   native adapter is available in this increment.
++
++Detection uses the executable's absolute directory, independently of the working
++directory and PATH. OpenSSL names follow `openssl.SSL_DLL_Names` and their matched
++crypto names on Windows; GnuTLS names are `libgnutls-30.dll`, then `libgnutls.dll`.
++Unix candidates are OpenSSL 3, 1.1, then unversioned library pairs, and GnuTLS
++30, then unversioned. Architecture and dependencies are checked by the platform
++loader; Windows also checks the PE machine before loading. Required client and
++verification exports must exist. An incomplete, corrupt, wrong-architecture or
++incompatible library is an error, not permission to move to a lower-priority
++backend. On Windows, safe DLL dependency-search flags must be supported by the OS.
++
++Configure overrides before the first factory call, including failed calls:
++
++```pascal
++SetSmartTLSBackend(tbSchannel); // bypass bundled libraries explicitly
++// Or:
++SetSmartTLSBackend(tbOpenSSL);
++SetSmartTLSLibraryPaths('C:\MyApp\libssl-3-x64.dll',
++  'C:\MyApp\libcrypto-3-x64.dll', '');
++```
++
++`GetSmartTLSBackend`, `TLSBackendName` and `GetSmartTLSLibraryPath` expose the
++selection without triggering it. Until successful selection, the backend is
++`tbAuto`. Configuration becomes immutable when selection starts. Explicit paths
++must be absolute and the OpenSSL pair must be supplied together. Missing
++explicit paths are errors. No environment variable implicitly changes policy.
++
++The existing explicit `opensslsockets` / `gnutlssockets` registration and usage
++remain available. `SetDefaultHandlerClass` clears the optional new lazy factory.
++The smart unit depends on its backends, so its initialization runs after theirs;
++its priority does not depend on the application's `uses` order.
++
++Smart selection owns TLS library initialization. Previously initialized bindings
++for a selected library are rejected. The new binding-level acquire APIs compare
++the pinned module handles under the same lock as legacy initialization. A
++competing initializer cannot silently substitute another module. Successful
++selection claims the binding until unit finalization: `DestroySSLInterface`
++returns false while claimed; `FreeGnuTLS` and loading a different GnuTLS path
++raise an exception. Existing explicit usage without a claim retains its behavior.
++The application must not release another owner's claim or directly overwrite
++global binding pointers.
++
++## Validation and client scope
++
++`VerifyPeerCert` and `fphttpclient.VerifySSLCertificate` keep the target
++branch's existing default, False. Set True explicitly for chain and hostname
++validation. False disables both checks for that connection; it does not change
++TLS protocol selection, encryption, backend selection or system security settings.
++`AfterSocketHandlerCreate` can override the handler option before connection.
++A custom `OnGetSocketHandler` result keeps the existing caller-owned setup rules.
++
++With True, Schannel uses automatic Windows trust/hostname validation. Smart
++OpenSSL installs its configured default CA paths, uses DNS or IP SAN matching as
++appropriate, and can also load the client's CA file/directory. Applications may
++need to supply OpenSSL CA material on Windows. GnuTLS uses its configured/system
++trust and enables hostname-aware handshake verification only with True. The
++smart GnuTLS verification-status check is likewise conditional. No provider
++fallback or implicit verification downgrade happens after TLS begins.
++
++The application callback retains its existing post-handshake semantics: it can
++reject an otherwise successful connection, but cannot rescue a handshake that
++already failed certificate verification. OpenSSL and Schannel invoke it after a
++successful handshake for either switch value; GnuTLS preserves its existing
++True-only callback behavior. This increment does not redefine it as a callback
++for individual validation errors.
++Client-only `Accept` fails explicitly. No application cryptography is implemented.
++
++Schannel supports the default OS protocol policy (`stAny`) and explicit TLS 1.2.
++It probes modern `SCH_CREDENTIALS` before using legacy credentials on systems
++that report those credentials unsupported, before any TLS handshake. This does
++not change FPC's OS compatibility baseline. Supported TLS versions depend on the
++OS policy; current tests cover Windows 10 x64 and TLS 1.2, not older Windows,
++Windows 11 TLS 1.3, 32-bit or ARM64.
++
++The first native client increment explicitly rejects client certificates,
++application CA files/directories, custom ciphers, ALPN and disabling SNI. These
++capabilities are not silently ignored. `CertificateData.HostName` remains the
++certificate-generation field; the optional Schannel `ServerName` property is
++the authenticated peer name when TCP connects to an IP or a tunnel. Otherwise
++the `TInetSocket` peer hostname is used. Callers should pass ASCII/IDNA hostnames.
++
++Schannel preserves incomplete TLS records, unconsumed encrypted bytes and
++decrypted leftovers. It handles `SEC_I_RENEGOTIATE` by returning to ISC with the
++same trust policy and preserves plaintext returned with renegotiation or
++`close_notify`. A TCP EOF without `close_notify` is a truncation error. Handshake
++uses `ConnectTimeout`, falling back to `IOTimeout`; send/receive operations use
++`IOTimeout`. The handler owns a nonblocking TCP transport and waits with the
++same socket deadline on partial sends/receives, including backpressure. Windows
++SSPI credential and trust calls are synchronous; socket deadlines do not cancel
++work inside those OS APIs. Closing has a bounded wait even if no I/O timeout was set. A handler
++has one owner: simultaneous operations on the same handler are not supported.
++
++## Build and reproduce
++
++Use the existing bootstrap compiler and GNU make from the FPC bin directory.
++FPC 3.2.2 cannot directly build the current `TNullPtr`-using library sources;
++build this branch's compiler and RTL first. Example from the source root:
++
++```powershell
++$env:PATH = 'C:\lazarus\fpc\3.2.2\bin\x86_64-win64;' + $env:PATH
++make -C compiler cycle FPC=C:/lazarus/fpc/3.2.2/bin/x86_64-win64/ppcx64.exe -j4
++make -C packages all FPC=D:/Projects/fpc/source/compiler/ppcx64.exe 'FPMAKEOPT=-T 4 -sap' -j4
++```
++
++The package build compiles unit targets for the current Windows target and skips
++example programs. It does not install anything. The test runner builds into the
++chosen output directory and preserves `results.log`:
++
++```powershell
++& .\packages\fcl-tls\tests\run.ps1 `
++  -OutputDirectory "$env:TEMP\fpc-native-tls-tests" `
++  -OpenSSLLibrary 'C:\Program Files\Git\mingw64\bin\libssl-3-x64.dll' `
++  -CryptoLibrary 'C:\Program Files\Git\mingw64\bin\libcrypto-3-x64.dll' `
++  -OpenSSLExecutable 'C:\Program Files\Git\mingw64\bin\openssl.exe' `
++  -OpenSSLCAFile 'C:\Program Files\Git\usr\ssl\certs\ca-bundle.crt' -Online
++```
++
++Omit `-Online` for tests without public-network access. Supply only already
++installed library fixtures; nothing is downloaded. The loader matrix creates
++isolated application directories. Supplying `-OpenSSLExecutable` adds 28 real
++local TLS tests even without `-Online`: temporary CA/leaf certificates, TLS
++1.2/1.3, DNS/IPv4/IPv6 identities, rejected chains and an intentionally truncated
++handshake. A Python SSL server binds loopback; its CA is supplied only in each
++child client's environment, not installed into any trust store. Test keys are
++disposable fixtures, not application credentials. The optional public runner
++temporarily sets the current PowerShell process's CA environment and restores it.
++
++`teststates.py` uses a test-only SSPI boundary
++provider, separately compiled, to test rare state transitions and send/close backpressure; it does not prove
++cryptography or real OS trust behavior. Public tests use real Schannel and retain
++system validation. The relay forwards ciphertext and splits TCP fragments; it
++does not decrypt traffic or change trust. A certificate test requires the expected
++Schannel validation code; connection errors/timeouts fail the test.
++
++Public EOF diagnosis and its bounded reproduction command are in
++[docs/openssl-eof.md](docs/openssl-eof.md). A diagnostic `probe` process may exit
++zero after collecting a failed handshake; its output never counts as a passing
++certificate test. No diagnostic configuration changes production selection or
++adds a retry/downgrade.
++
++See [docs/validation.md](docs/validation.md) for the observed results and gaps.
++
++## API references
++
++- [Microsoft Schannel credential policy](https://learn.microsoft.com/en-us/windows/win32/api/schannel/ns-schannel-schannel_cred)
++- [Microsoft Schannel decryption and renegotiation](https://learn.microsoft.com/en-us/windows/win32/secauthn/decryptmessage--schannel)
++- [Microsoft Schannel shutdown](https://learn.microsoft.com/en-us/windows/win32/secauthn/shutting-down-an-schannel-connection)
++- [GnuTLS session verification](https://gnutls.org/manual/html_node/Core-TLS-API.html#gnutls_005fsession_005fset_005fverify_005fcert)
+diff --git a/packages/fcl-tls/docs/macos-transport.md b/packages/fcl-tls/docs/macos-transport.md
+new file mode 100644
+index 0000000000..d879e3b53f
+--- /dev/null
++++ b/packages/fcl-tls/docs/macos-transport.md
+@@ -0,0 +1,192 @@
++# Proposed macOS connection adapter
++
++This is a design for the next increment, not implemented or tested macOS code.
++
++## Existing ownership constraint
++
++`TInetSocket` currently creates a raw TCP socket, completes the TCP connection,
++then invokes `TSocketHandler.Connect`. Schannel and the existing third party
++backends wrap that socket. Network.framework creates and owns its TCP+TLS
++connection. Registering another `TSSLSocketHandler` after TCP connect would make
++a second connection, leave socket readiness/endpoints inconsistent and bypass
++existing timeout/close semantics. Do not implement it through a fake file
++descriptor or a second hidden TCP connection.
++
++## Recommended seam
++
++Introduce a client connection stream abstraction in fcl-net, with no dependencies
++on TLS providers. Keep `TInetSocket` and its socket handlers unchanged for existing
++users; a socket-backed adapter wraps them for the new HTTP client seam. Add an
++optional connection factory used before any TCP socket is created. A proposed
++interface for the next implementation stage:
++
++```pascal
++TClientConnection = class(TStream)
++  procedure Connect(const Host: String; Port: Word); virtual; abstract;
++  function CanRead(Timeout: Integer): Boolean; virtual; abstract;
++  procedure Close; virtual; abstract;
++  // Contract also includes ConnectTimeout, IOTimeout, PeerClosed,
++  // error descriptions, authenticated peer, negotiated ALPN and endpoints.
++end;
++TClientConnectionFactory = function: TClientConnection;
++```
++
++`fphttpclient` would get a virtual `CreateClientConnection` hook and retain its
++existing socket path as the default. Review each current `TSocketStream` use
++(timeouts, proxy handling, EOF, keep-alive, extract socket, endpoint access) before
++changing its field type. Preserve public socket APIs by exposing a socket only
++for socket-backed connections; document a native transport's absence explicitly.
++The smart selector owns both handler and transport factory selection under the
++same lock. Direct legacy `TSSLSocketHandler.GetDefaultHandler` callers cannot
++use a Network.framework-only adapter and must receive a clear capability error.
++
++An alternative is to make `TSocketStream` support a transport without a socket
++and add an ownership capability to `TSocketHandler`. That touches constructors,
++raw close, endpoint getters and readiness extensively; the dedicated client
++connection seam makes ownership easier to review. A preconnected-socket bridge
++is not recommended for Network.framework.
++
++## Network.framework adapter
++
++Create one `nw_connection` from the logical hostname, port and TCP+TLS parameters.
++Use a dedicated serial dispatch queue for state/send/receive callbacks. Adapt
++synchronous `TStream` operations with bounded queues and condition events;
++never block the callback queue while waiting for a completion on that queue.
++Retain callback blocks, the connection and data until each completion finishes.
++Cancel on deadlines, wake waiters exactly once and make repeated close safe.
++Prevent late callbacks from accessing a freed Pascal stream.
++
++Honor the existing False default and explicit VerifyPeerCert setting. With
++True, keep platform system trust and hostname verification enabled. With False,
++a per-connection verification block may accept the supplied peer without those
++checks; do not change TLS protocol policy, OS settings or the selected backend.
++Keep application callbacks as post-handshake vetoes, rather than changing them
++into callbacks for individual certificate errors. Treat verify, readiness and send failures
++as terminal for the selected provider. Enable ALPN through TLS protocol options
++when implemented and return the platform's selected protocol. No software crypto.
++
++Runtime-detect the system framework and required symbols. Do not raise the FPC
++branch's baseline to Network.framework's availability. Older macOS without the
++framework reports no native backend after absent bundled libraries. Secure
++Transport support remains an explicit future decision, not an implicit fallback.
++Preserve modern macOS certificate trust and sandbox behavior. Proxy support and
++client credentials need explicit capability decisions before an implementation
++claims parity with the socket path.
++
++## Required macOS acceptance
++
++Build and run on actual x86_64 and arm64 macOS, covering the target branch's
++compiler baseline and supported framework versions. Test absent/broken bundled
++libraries, default system trust, wrong hostname/expired/untrusted certificates,
++fragmented multi-megabyte reads/writes, timeouts during connect and I/O,
++cancel-vs-completion races, clean EOF, repeated close, keep-alive, ALPN and proxy
++capabilities. Add checks for callback lifetime and no second TCP connection.
++Windows results and simulated SSPI tests provide no macOS runtime evidence.
++
++The owner subsequently created and authorized ACTom/fpc-macos-ci for the
++necessary test payload. It is public and was empty on inspection. The first
++manual preflight is prepared below; no run has been started.
++
++## Observed Windows host toolchain
++
++Read-only checks on 2026-10-05 found the following. They cover PATH and known
++FPC/RAD Studio installation and SDK-cache locations, not every directory on disk.
++
++- The built FPC 3.3.1 x86_64 compiler lists Darwin as a target and accepts
++  `-Tdarwin`. Its native code-generation backend also recognizes CBLOCKS.
++- Installed and built RTL directories contain only `x86_64-win64`. A minimal
++  `-Tdarwin -Cn` program actually failed with `Can't find unit system`; no
++  executable was linked. This is a missing target RTL, not a Network.framework
++  compilation or runtime result.
++- No `ppca64` / `ppcrossx64`, clang, lld, xcrun or xcodebuild was found on PATH.
++- Existing RAD Studio 37 contains Delphi `dccosx64` / `dccosxarm64`, which do not
++  supply FPC units. Its `bin/ld.exe -v` reports an LD64 Windows port (951_9),
++  with x86_64/arm64 support and LLVM 15.0.7 LTO support. Thus a Mach-O linker
++  exists on this machine even though it is not on PATH. Compatibility with FPC
++  link command/options has not been established.
++- No Apple SDK was found in the repository, known Lazarus/FPC target directories
++  or the checked personal/public RAD Studio SDK caches. Existing univint sources
++  do not declare `nw_connection_create`, `sec_protocol_options_set_verify_block`
++  or `dispatch_queue_create` in the checked source subtree.
++
++## Conditions for the next implementation stage
++
++1. Confirm the client connection factory seam before changing HTTP stream
++   ownership. Implement and test the existing socket adapter on Windows first.
++2. Supply/build compatible x86_64 Darwin RTL/package units and an aarch64 FPC
++   cross compiler plus target RTL. Compiler source target support alone is not
++   a usable target runtime or a successful cross build.
++3. Provide an Apple-authorized SDK/framework interface set through the owner's
++   existing development environment, and verify the selected Mach-O linker with
++   FPC. Network.framework, Security, libSystem/dispatch and callback-block ABI
++   bindings need target compilation and lifetime checks. No SDK has been
++   downloaded, copied from an unrelated project or substituted during this work.
++4. Provide real macOS x86_64 and arm64 execution for network/trust, callbacks,
++   timeout/cancellation and connection ownership. Windows cross compilation
++   cannot establish that these platform behaviors work.
++5. Decide how older macOS without required Network.framework APIs behaves,
++   including whether a Secure Transport adapter is in scope. Keep the FPC branch
++   baseline unchanged and use runtime capability detection.
++
++The prepared CI uses only the runner's existing Xcode SDK and tools. No SDK
++or software is installed on the Windows host. FPC bootstrap provisioning is a
++separate unresolved requirement; this first preflight does not download one.
++The installed linker permits further toolchain investigation; it does not remove
++the missing SDK/RTL and real-runtime blockers.
++
++## References
++
++- [Apple Network.framework](https://developer.apple.com/documentation/network)
++- [Apple nw_connection_create](https://developer.apple.com/documentation/network/nw_connection_create(_:_:))
++- [Apple TLS verification callback](https://developer.apple.com/documentation/security/sec_protocol_options_set_verify_block(_:_:_:))
++
++## Current HTTP seam audit and bounded implementation plan
++
++The HTTP client owns FSocket as TSocketStream (fphttpclient.pp:151); normal
++connection creation is at :845-850, reads/writes at :893/:898, IOTimeout updates
++at :693-694, and IsConnected currently means FSocket is assigned (:705).
++Socket/ExtractSocket expose that concrete type (:387/:802). Server-sent events
++also take ownership of it (:1614) and access its Handler.BytesAvailable (:2757).
++These are the concrete reasons a Network.framework handler cannot be bolted on
++after TInetSocket's existing TCP connect.
++
++The next production change is a pre-TCP client-connection factory plus one stream
++owner: a socket-backed adapter retains existing handler setup/event order; a
++Network.framework adapter owns one nw_connection. HTTP reads/writes, readiness,
++timeouts, connected state and close move through that connection abstraction.
++The old Socket/ExtractSocket paths retain ownership semantics for socket-backed
++connections. Native socket extraction must report an explicit capability error;
++an ExtractConnection API is needed for native ownership transfer. The first
++native HTTP scope must reject unsupported proxy/Unix-socket/SSE extraction,
++custom client credentials and ALPN rather than silently ignoring them. Each
++capability can be added with its own runtime test after the basic adapter works.
++
++Implement/test the neutral socket adapter and field ownership on Windows before
++replacing any HTTP path. Then compile Darwin bindings (or a small C ABI shim)
++against the installed Apple SDK, bridge serial-queue completions to bounded
++synchronous stream operations, and test cancelled/late callback lifetime on real
++macOS. This is a public ownership-interface change; it is not hidden in this
++preflight, and no HTTP ownership change has yet been made.
++
++## Prepared first macOS CI stage
++
++`tests/macos/networkframework-api.c` is a construction probe. It compiles the
++actual Apple SDK's Network/Security/dispatch types and callback blocks, constructs
++both verification configurations, and releases them. It never calls
++nw_connection_start, opens no TCP connection, and supplies no HTTPS, certificate,
++queue cancellation or Pascal-runtime evidence. It is not a production backend.
++All CI orchestration is maintained separately in
++[ACTom/fpc-macos-ci](https://github.com/ACTom/fpc-macos-ci). Its `ci/preflight.sh`
++checks the actual architecture and existing SDK/tools; absence of an existing
++FPC is explicitly reported as NOT RUN, not installed. No GitHub Actions workflow
++or CI-only runner script is included in this FPC source patch.
++
++The test repository's `.github/workflows/macos-preflight.yml` configures only
++workflow_dispatch: no push, pull_request or schedule triggers. Exactly two standard jobs use macos-15-intel (x86_64) and
++macos-15 (arm64), each bounded to 15 minutes, with concurrency limiting duplicate
++runs. They verify a SHA256-fixed patch against exact base 56900cd3a58b32cf3c0f8a3b48443a139bab8e0d,
++download one source snapshot without mirroring history, then compile/link/run the
++API probe using the runner's existing authorized Apple SDK. First-run approval
++is still required. This stage does not claim FPC Darwin compilation or native TLS
++acceptance. A usable Darwin bootstrap compiler/RTL plus the adapter and real TLS
++matrix are subsequent work, subject to explicit tool provisioning when needed.
+diff --git a/packages/fcl-tls/docs/openssl-eof.md b/packages/fcl-tls/docs/openssl-eof.md
+new file mode 100644
+index 0000000000..475c795980
+--- /dev/null
++++ b/packages/fcl-tls/docs/openssl-eof.md
+@@ -0,0 +1,89 @@
++# OpenSSL public EOF investigation
++
++This follow-up distinguishes a certificate rejection from a connection that ends
++before certificate processing. The initial public online run remains failed;
++EOF is never considered a successful negative certificate test.
++
++## Bounded experiment
++
++On 2026-10-05, `untrusted-root.badssl.com` resolved here to `104.154.89.105`.
++All configurations used the same installed Git OpenSSL 3.5.4 DLLs and CA bundle,
++explicit hostname verification and certificate verification. Every probe was a
++new process; no backend retried or changed protocol after failure.
++
++| Configuration | Trial 1 | Trial 2 |
++| --- | --- | --- |
++| Independent openssl s_client, default | EOF, handshake read 0 bytes | EOF, handshake read 0 bytes |
++| FPC smart, default protocol | X.509 19, certificate verify failed | EOF, X.509 default 0, inactive TLS |
++| Independent s_client, X25519 group | EOF, read 0 bytes | X.509 19, read 2927 bytes |
++| Independent s_client, explicit TLS 1.2 | X.509 19, read 2935 bytes | X.509 19, read 2935 bytes |
++| FPC smart, explicit TLS 1.2 | X.509 19, inactive TLS | X.509 19, inactive TLS |
++
++The default CLI ClientHello was about 1.5 KiB; the X25519 CLI hello was about
++330 bytes. The shorter hello still failed once, so these observations do not
++establish a ClientHello-size cause. The successful certificate-processing paths
++correctly rejected a self-signed certificate in the supplied chain (19).
++
++The independent CLI reproduces the failure without any FPC code, and in the
++zero-read failures there is no peer certificate to authenticate. A displayed
++`Verify return code: 0` in an incomplete handshake is not authenticated success.
++This excludes the FPC-specific handler path as a necessary cause of the symptom.
++It does not identify whether the remote endpoint, an intermediate network
++component or an OpenSSL interoperability interaction causes the termination.
++There is no packet capture or server-side trace proving the exact external cause.
++
++The original diagnostic logs are in the task's
++`tls-build/public-eof-probe/results.json` and `variants.json`. They retain complete
++CLI handshake state/message output and FPC verification/active-state output.
++Public diagnostics are collected separately from the strict regression runner.
++
++The checked-in `testpublicprobe.py` was subsequently run once to verify its
++reproduction path. The independent CLI default, X25519 and explicit TLS 1.2
++probes all reached certificate processing and rejected the chain (19); the FPC
++default probe also rejected it (19), while the FPC explicit TLS 1.2 probe ended
++with EOF, default verification result 0 and inactive TLS. Its complete record is
++`tls-build/public-probe-repro/results.json`. Thus explicit TLS 1.2 is not a
++reliable workaround either. The collection command exited 0, which confirms
++diagnostic collection only, not a passing certificate-test run.
++
++## Reproduce without changing trust settings
++
++First build with `tests/run.ps1`, supplying the existing OpenSSL pair and
++`-OpenSSLExecutable`. Then collect up to two rounds of public diagnostics:
++
++```powershell
++python .\packages\fcl-tls\tests\testpublicprobe.py `
++  "$env:TEMP\fpc-native-tls-tests\testopensslpeer.exe" `
++  'C:\Program Files\Git\mingw64\bin\openssl.exe' `
++  'C:\Program Files\Git\mingw64\bin\libssl-3-x64.dll' `
++  'C:\Program Files\Git\mingw64\bin\libcrypto-3-x64.dll' `
++  'C:\Program Files\Git\usr\ssl\certs\ca-bundle.crt' `
++  "$env:TEMP\fpc-public-eof-probe" --trials 2
++```
++
++Each subprocess has its own CA environment. This command collects diagnostics;
++an exit zero means collection completed, not that a failed TLS handshake passed
++validation. Public conditions can differ on another run.
++
++## Independent local evidence
++
++`testlocaltls.py` creates fresh disposable CA/leaf certificates and runs a Python
++SSL server exclusively on loopback. It covers fixed TLS 1.2/1.3, automatic
++protocol negotiation with a TLS1.2-only server, DNS/IPv4/IPv6 SANs, expired,
++self-signed and unknown-root chains, complete untrusted chains, fphttpclient,
++and deliberate TCP FIN before any certificate. All 28 cases passed.
++
++Certificate cases require exact X.509 errors plus the validation-failure text.
++The deliberate EOF has X.509 default 0, a failed handshake and inactive TLS.
++No failure is rescued by a callback, backend fallback or validation downgrade.
++The full regression runner with local fixtures exited 0; the prior public failure
++remains recorded in [validation.md](validation.md).
++
++These experiments demonstrate that the current client validates the controlled
++chains and distinguishes truncation correctly. No TLS runtime change is justified
++by the available evidence. This follow-up changes only tests and documentation.
++
++## References
++
++- [OpenSSL CA validity controls](https://docs.openssl.org/3.5/man1/openssl-ca/)
++- [OpenSSL s_client diagnostics](https://docs.openssl.org/3.5/man1/openssl-s_client/)
+diff --git a/packages/fcl-tls/docs/validation.md b/packages/fcl-tls/docs/validation.md
+new file mode 100644
+index 0000000000..7a6b7bf23d
+--- /dev/null
++++ b/packages/fcl-tls/docs/validation.md
+@@ -0,0 +1,215 @@
++# Windows increment validation
++
++Recorded on 2026-10-05 against base commit
++`56900cd3a5` (`Update FileDialog demo.`), branch
++`feature/native-tls-smart-sockets`. The repository was clean before this work.
++No reset, commit, push, remote publication or software installation was performed.
++
++## Environment and build
++
++- Windows 10 x64, OS build 19044.
++- Existing Lazarus FPC 3.2.2 x86_64-win64 bootstrap and GNU make 3.80.
++- This source branch's FPC 3.3.1 compiler and RTL were built with `compiler cycle`.
++- `packages all` with `FPMAKEOPT=-T 4 -sap` built Windows package unit targets,
++  including fcl-net, OpenSSL, GnuTLS and the new fcl-tls package. Examples are
++  excluded by that option. This is not the compiler's complete regression suite.
++- Existing Git OpenSSL 3.5.4 DLLs and Git's CA bundle were used as fixtures.
++  The test process temporarily sets `SSL_CERT_FILE`; it restores the prior value
++  and does not modify the Windows certificate store.
++- Build/test outputs are outside the source tree in the task's `tls-build`
++  directory. `packages-final.log` and `final-results/results.log` are the final
++  build and test logs; earlier runs remain in separately named directories.
++
++Use [../tests/run.ps1](../tests/run.ps1) and the commands in
++[../README.md](../README.md) to reproduce. Without `-Online`, only deterministic
++local tests and supplied-library loader tests run. No software is downloaded.
++
++## Initial increment checks (before the switch compatibility correction)
++
++| Area | Evidence |
++| --- | --- |
++| Pure selection policy | 13 checks: OpenSSL before GnuTLS before native; explicit overrides; invalid/absent libraries; unavailable native backend |
++| Lazy factory compatibility | Deferred factory call; explicit class registration clears the factory; nil native certificate generator is safe; unsupported certificate generation fails |
++| Concurrent smart construction | 16 threads, 100 constructions per thread, for both native and checked OpenSSL selection |
++| Actual Windows loader | 17 isolated application-directory cases, including broken/incomplete pairs, missing exports, wrong architecture, ignored working-directory DLLs, overrides and preinitialized bindings |
++| External initializer competition | 50 competing legacy OpenSSL initializations; pinned module identity remains consistent; mismatched acquisition fails; claimed binding cannot be destroyed |
++| GnuTLS loader ownership | Harmless stub module verifies that a claimed binding cannot be freed, reloaded or acquired with a different handle; this is not a real GnuTLS handshake |
++| No third party runtime | Absent-library native factory checks that neither global OpenSSL nor GnuTLS binding was initialized |
++| Client-only boundary | Schannel Accept fails with an error and never activates TLS; smart third party wrappers explicitly reject Accept |
++| Real HTTP composition | fphttpclient exercises the smart factory with explicit Schannel, default verification switch left false |
++| Real Windows trust | example.com succeeds; badssl wrong hostname, expired, self-signed and untrusted-root certificates produce strict native validation errors |
++| Fragmented receive | 1 MiB response across about 4,100 ciphertext relay writes; one-byte header reads and decrypted leftovers; also forced TLS 1.2 |
++| Large send | 1 MiB TLS upload and authenticated HTTP response through the ciphertext relay |
++| Socket deadlines | Stalled handshake and receive timeout with 150 ms configuration |
++| Shutdown | Real close_notify generation, deactivated TLS state and repeated shutdown |
++| Rare SSPI transitions | Isolated scripted boundary provider tests incomplete encrypted records, buffered plaintext, renegotiation without EXTRA, plaintext with close_notify and clean TLS EOF |
++| Send/close backpressure | Same production handler against loopback with small buffers and a scripted SSPI provider; send expires around 150 ms and default no-IOTimeout close around 2 seconds |
++| Smart OpenSSL trust | Actual OpenSSL 3.5.4 trusted DNS and IPv4 SAN endpoints, plus certificate rejection checks, while fphttpclient's legacy verification switch is false |
++
++Native certificate errors observed:
++
++- Wrong hostname: `SEC_E_WRONG_PRINCIPAL`, `0x80090322`.
++- Expired certificate: `SEC_E_CERT_EXPIRED`, `0x80090328`.
++- Self-signed and untrusted root: `SEC_E_UNTRUSTED_ROOT`, `0x80090325`.
++
++The negative tests require a certificate validation error. Socket timeout,
++unexpected EOF or another network failure makes the test fail, rather than being
++counted as a successful rejection. Selection stays frozen after a handshake
++failure; those tests also assert the selected backend remains unchanged.
++
++## Review and observed failures
++
++An independent read-only review found three important issues, fixed in this
++increment and reviewed again: a probe/legacy loader race, blocking sends exceeding
++socket deadlines, and OpenSSL 1.1.1 IP literals using DNS verification rules.
++The final read-only review found no residual critical/important issue within
++those three fixes. The reviewer did not independently run the tests.
++
++The binding acquire APIs now compare pinned module identities atomically and
++claim them until smart unit finalization. Schannel uses nonblocking TCP with
++WOULDBLOCK retries under one deadline. A small protected OpenSSL peer-identity
++hook prevents legacy Connect from overwriting the smart IP rule; explicit legacy
++clients keep their previous behavior.
++
++Earlier runner attempts exposed a PowerShell Tee-Object parameter incompatibility
++and an OpenSSL IP endpoint returning HTTP 301 with an empty body. Both test-harness
++problems were corrected. The IP endpoint's authenticated 301 is now accepted
++without following it, so the test still verifies the original IP connection.
++
++Some earlier public endpoint tests failed with a TCP/TLS timeout or unexpected
++EOF. Their logs are retained, including a native wrong-host timeout and OpenSSL
++expired/self-signed/untrusted-root EOFs on different runs. None was counted as a
++certificate rejection. Public network conditions remain an external source of
++test variability; the final run outcome is recorded below.
++
++## Remaining acceptance gaps
++
++- Real GnuTLS TLS access and certificate matrix: no GnuTLS runtime is installed
++  in the available environment. Compilation, symbol guards and loader ownership
++  tests do not establish runtime handshake correctness.
++- OpenSSL 1.1.1 actual runtime: not available/tested here. OpenSSL 3 now has
++  local IPv4/IPv6 SAN evidence, which is not a substitute for version 1.1.1.
++- Real Schannel renegotiation, post-handshake authentication and TLS 1.3: the
++  rare control-flow cases use a simulated SSPI boundary provider. Windows 10
++  here does not provide the supported Schannel TLS 1.3 baseline; Windows 11 or
++  Server 2022 testing remains required.
++- Older supported Windows, Win32 and ARM64 builds/runs, dotted-unit build and
++  the complete compiler regression suite: not run.
++- Schannel custom trust, client certificates, ALPN and custom cipher configuration
++  are explicitly unsupported in this client increment, rather than ignored.
++- Windows SSPI credential and system trust calls are synchronous. Socket
++  deadlines bound network waits and partial sends; they cannot cancel work
++  inside the OS trust APIs. One handler has a single owner; simultaneous
++  operations on the same handler are unsupported.
++- macOS implementation and runtime validation: not started. The separate
++  [macOS transport design](macos-transport.md) describes the pre-TCP connection
++  factory required by Network.framework. Older macOS Secure Transport support
++  and the architecture choice require a later decision.
++- No public repository, MR or macOS CI job exists. Publication remains outside
++  the authorization for this increment.
++
++## Recorded build and public run outcome
++
++`packages-final.log`: exit 0. `git diff --check`: exit 0.
++
++`final-results/results.log`: the full optional-online runner exited 1 with one
++failure, smart OpenSSL against `untrusted-root.badssl.com`, which returned
++`unexpected eof while reading`. This run does not prove OpenSSL rejected that
++endpoint's certificate. A previous strict run did reach certificate verification
++and rejected it; the inconsistent public-network result remains recorded rather
++than hidden or counted as a pass.
++
++Every Schannel, policy, factory, loader, ownership, scripted-state and transport
++test in that final run passed. Schannel validated example.com (HTTP 200, 577
++bytes) and rejected all four invalid-certificate endpoints with the expected
++HRESULTs. The native 1 MiB receive, upload, forced TLS 1.2, handshake/read timeout
++and close checks passed. Scripted send pressure expired at 156 ms and default
++close pressure at 2031 ms.
++
++The same run's smart OpenSSL 3.5.4 checks passed trusted DNS, trusted IPv4 SAN
++(HTTP 301 from 1.1.1.1), wrong hostname, expired and self-signed certificate
++rejection, with the legacy verification switch false. No additional network
++retry was used to turn the failed full run into an all-pass claim.
++
++The final deterministic offline run (offline-final/results.log) exited 0,
++including the same 17 loader cases, binding race/claims, four scripted SSPI
++scenarios and local handshake deadline. No source implementation changed after
++the final build and online run.
++
++## Deterministic real TLS follow-up
++
++The same branch now includes `testlocaltls.py` and `testopensslpeer.pp`.
++`deterministic-final/results.log` exited 0, including all previous offline checks
++and 28 real TLS cases. The client uses Git OpenSSL 3.5.4; the Python server uses
++OpenSSL 3.0.19. Each case binds loopback and supplies only the trusted disposable
++root through its client subprocess environment. No system certificate store is
++changed and no software is installed.
++
++Under both fixed TLS 1.2 and TLS 1.3, tests passed trusted DNS/IPv4, wrong DNS (62),
++expired (10), self-signed (18), untrusted root without a supplied root (20),
++untrusted complete chain (19), and numeric DNS SAN that cannot authenticate an
++IP literal (64). Separate loopback IPv6 success and rejection passed. A default
++automatic-protocol client against a TLS1.2-only server succeeded for a trusted
++chain and rejected an untrusted complete chain. fphttpclient succeeded on the
++trusted case and rejected all five negative certificate cases with its legacy
++verification switch false.
++
++Deliberately closing TCP after ClientHello, before sending a certificate,
++reproduced `0A000126` EOF under both protocols. Those cases require handshake
++failure, inactive TLS and verification result 0 (the uninitialized/default
++verdict); they explicitly exclude certificate rejection. Raw server actions,
++negotiated versions, client stdout/stderr and exit codes are saved in
++`deterministic-final/local-tls/results.json`.
++
++Independent public OpenSSL command-line and FPC probes reproduced early EOF;
++see [the bounded diagnostic report](openssl-eof.md). The original online exit 1
++remains recorded above. The checked-in public diagnostic script also ran
++successfully as a collector; its explicit TLS 1.2 FPC probe returned EOF,
++so the collector exit 0 is not a validation pass or a protocol workaround.
++The local exit 0 supplies separate deterministic
++certificate evidence and does not convert that public failure into a pass.
++No TLS runtime source was changed during this diagnostic follow-up. A read-only
++review of the new assertions found no important issue; the reviewer did not
++independently execute the tests.
++
++## Verification switch compatibility correction
++
++The previous strict-smart policy has been replaced after the interface audit.
++Current smart and Schannel handlers honor VerifyPeerCert; HTTP clients keep the
++existing VerifySSLCertificate default False. True enables chain/hostname checks;
++False only disables those checks. No protocol fallback, provider switch or
++system-trust setting is changed. GnuTLS's previously unconditional handshake
++validation is now gated by the same option. Post-handshake callbacks are unchanged.
++
++`verify-red/results.json` records the test-first reproduction: the traditional
++OpenSSL control succeeded with False and a self-signed loopback server, while
++the previous smart/Schannel implementations incorrectly rejected it.
++
++`verify-expanded/results.log` exited 0, with 87 real local TLS cases. Those include
++the previous 28 strict checks (now explicitly True), False/default/after-create
++successes against wrong-DNS, expired, self-signed and untrusted chains, callback
++vetoes, six same-process/same-client False-to-True or True-to-False sequences,
++and ten additional False/OpenSSL TLS1.3 connections. The Python server observed
++encrypted TLS and HTTP requests; `verify-expanded/local-tls/results.json` retains
++the raw evidence. The sequences recreate handlers, rather than proving reuse of
++the exact same underlying handler. Schannel's local True negatives encounter the
++untrusted disposable root first; OpenSSL isolates DNS/expiry with its child-only
++CA file. No temporary root was added to Windows trust.
++
++The complete offline runner also passed policy, lazy factory, 17 loader cases,
++binding ownership/50 competing initializations, scripted SSPI state/deadline
++checks and handshake timeout. `packages-verify.log` records package build exit 0.
++A read-only independent review found no Critical/Important defect and verified
++the two-request assertions and recorded TLS1.3 evidence.
++
++`verify-expanded/native-online.log` exited 1: example.com, wrong hostname,
++self-signed/untrusted-root rejection, a True-mode application veto, 1 MiB upload
++and fragmented download, read timeout and explicit TLS1.2 transport passed.
++The expired.badssl.com attempt ended with TCP truncation before certificate
++verification and remains a failure, not a successful certificate rejection.
++The earlier public OpenSSL EOF failure remains recorded above as well.
++
++No real GnuTLS library, OpenSSL1.1.1, Win32/ARM64/older-Windows or Schannel TLS1.3
++runtime was tested. A separate existing GnuTLS same-handler reconnect/session
++ownership issue was confirmed unchanged in the base commit; HTTP tests here
++create fresh handlers. macOS execution remains pending the prepared CI stage.
+diff --git a/packages/fcl-tls/fpmake.pp b/packages/fcl-tls/fpmake.pp
+new file mode 100644
+index 0000000000..494ef8e2af
+--- /dev/null
++++ b/packages/fcl-tls/fpmake.pp
+@@ -0,0 +1,32 @@
++{$ifndef ALLPACKAGES}
++{$mode objfpc}{$H+}
++program fpmake;
++uses {$ifdef unix}cthreads,{$endif} fpmkunit;
++var P: TPackage; T: TTarget;
++begin
++  with Installer do
++    begin
++{$endif}
++    P:=AddPackage('fcl-tls');
++    P.ShortName:='fcltls';
++{$ifdef ALLPACKAGES}
++    P.Directory:=ADirectory;
++{$endif}
++    P.Version:='3.3.1';
++    P.Description:='Client TLS backend selection for FCL sockets.';
++    P.License:='LGPL with modification';
++    P.OSes:=AllUnixOSes+[win32,win64]-[qnx];
++    if Defaults.CPU=jvm then P.OSes:=P.OSes-[java,android];
++    P.Dependencies.Add('fcl-net');
++    P.Dependencies.Add('openssl');
++    P.Dependencies.Add('gnutls');
++    P.SourcePath.Add('src');
++    T:=P.Targets.AddUnit('tlsbackendpolicy.pp');
++    T:=P.Targets.AddUnit('smartsslsockets.pp');
++    T.Dependencies.AddUnit('tlsbackendpolicy');
++    P.NamespaceMap:='namespaces.lst';
++{$ifndef ALLPACKAGES}
++    Run;
++    end;
++end.
++{$endif}
+diff --git a/packages/fcl-tls/namespaced/System.Net.SmartSSLSockets.pp b/packages/fcl-tls/namespaced/System.Net.SmartSSLSockets.pp
+new file mode 100644
+index 0000000000..98de57a49d
+--- /dev/null
++++ b/packages/fcl-tls/namespaced/System.Net.SmartSSLSockets.pp
+@@ -0,0 +1,3 @@
++unit System.Net.SmartSSLSockets;
++{$DEFINE FPC_DOTTEDUNITS}
++{$i smartsslsockets.pp}
+diff --git a/packages/fcl-tls/namespaced/System.Net.TLSBackendPolicy.pp b/packages/fcl-tls/namespaced/System.Net.TLSBackendPolicy.pp
+new file mode 100644
+index 0000000000..48e6249d5c
+--- /dev/null
++++ b/packages/fcl-tls/namespaced/System.Net.TLSBackendPolicy.pp
+@@ -0,0 +1,3 @@
++unit System.Net.TLSBackendPolicy;
++{$DEFINE FPC_DOTTEDUNITS}
++{$i tlsbackendpolicy.pp}
+diff --git a/packages/fcl-tls/namespaces.lst b/packages/fcl-tls/namespaces.lst
+new file mode 100644
+index 0000000000..4fc2f08d6d
+--- /dev/null
++++ b/packages/fcl-tls/namespaces.lst
+@@ -0,0 +1,4 @@
++{s*:src/}=namespaced/
++{i+:src/}
++src/tlsbackendpolicy.pp=namespaced/System.Net.TLSBackendPolicy.pp
++src/smartsslsockets.pp=namespaced/System.Net.SmartSSLSockets.pp
+diff --git a/packages/fcl-tls/src/smartsslsockets.pp b/packages/fcl-tls/src/smartsslsockets.pp
+new file mode 100644
+index 0000000000..868bfb4169
+--- /dev/null
++++ b/packages/fcl-tls/src/smartsslsockets.pp
+@@ -0,0 +1,448 @@
++{
++    This file is part of the Free Component Library (FCL).
++    Deterministic, lazy client TLS backend selection.
++    See COPYING.FPC for details about the copyright.
++}
++{$IFNDEF FPC_DOTTEDUNITS}
++unit smartsslsockets;
++{$ENDIF}
++{$mode objfpc}{$H+}
++{$macro on}
++{$IFDEF FPC_DOTTEDUNITS}
++{$define policyunit:=System.Net.TLSBackendPolicy}
++{$ELSE}
++{$define policyunit:=tlsbackendpolicy}
++{$ENDIF}
++interface
++{$IFDEF FPC_DOTTEDUNITS}
++uses System.SysUtils, System.Net.Sslsockets, System.Net.TLSBackendPolicy;
++{$ELSE}
++uses SysUtils, sslsockets, tlsbackendpolicy;
++{$ENDIF}
++type
++  ESmartTLS = class(ESSLSocketError);
++  TTLSBackend = policyunit.TTLSBackend;
++const
++  tbAuto = policyunit.tbAuto;
++  tbOpenSSL = policyunit.tbOpenSSL;
++  tbGnuTLS = policyunit.tbGnuTLS;
++  tbSchannel = policyunit.tbSchannel;
++  tbNetworkFramework = policyunit.tbNetworkFramework;
++
++// Configure before the first factory invocation, including failed attempts.
++procedure SetSmartTLSBackend(Backend: TTLSBackend);
++// Empty paths use fixed application-directory names. Nonempty paths must be
++// absolute. OpenSSL's SSL/crypto pair must be configured together.
++procedure SetSmartTLSLibraryPaths(const SSLPath, CryptoPath, GnuTLSPath: String);
++// tbAuto until selection succeeds. Reading does not initialize a library.
++function GetSmartTLSBackend: TTLSBackend;
++function TLSBackendName(Backend: TTLSBackend): String;
++function GetSmartTLSLibraryPath: String;
++
++implementation
++{$IFDEF FPC_DOTTEDUNITS}
++uses System.Classes, System.DynLibs, System.Net.Ssockets, System.Net.Sslbase, System.Net.Sockets, Api.Openssl,
++  System.Net.Fpopenssl, System.Net.Opensslsockets, Api.GnuTls, System.Net.Gnutlssockets
++  {$IFDEF WINDOWS}, WinApi.Windows, System.Net.SchannelSSLSockets{$ENDIF};
++{$ELSE}
++uses Classes, DynLibs, ssockets, sslbase, sockets, openssl, fpopenssl, opensslsockets, gnutls, gnutlssockets
++  {$IFDEF WINDOWS}, Windows, schannelsslsockets{$ENDIF};
++{$ENDIF}
++type
++  TLibraryProbe = record
++    State: TTLSLibraryState;
++    Path, Companion, ErrorText: String;
++    Handle, CompanionHandle: TLibHandle;
++  end;
++  TGetVerifyParam = function(Connection: PSSL): Pointer; cdecl;
++  TSetVerifyIP = function(Param: Pointer; IP: PAnsiChar): LongInt; cdecl;
++  TSetDefaultVerifyPaths = function(Context: PSSL_CTX): LongInt; cdecl;
++  TSmartGnuTLSHandler = class(TGNUTLSSocketHandler)
++  public
++    function Connect: Boolean; override;
++    function Accept: Boolean; override;
++  end;
++  TSmartOpenSSLHandler = class(TOpenSSLSocketHandler)
++  protected
++    function CreateSSLContext(AType: TSSLType): TSSLContext; override;
++    procedure ConfigurePeerIdentity(const HostName: AnsiString); override;
++  public
++    function Connect: Boolean; override;
++    function Accept: Boolean; override;
++  end;
++
++var
++  SelectionLock: TRTLCriticalSection;
++  RequestedBackend: TTLSBackend = tbAuto;
++  SelectedBackend: TTLSBackend = tbAuto;
++  SelectionStarted: Boolean;
++  SelectionError, SelectedPath, ConfigSSL, ConfigCrypto, ConfigGnuTLS: String;
++  SelectedClass: TSSLSocketHandlerClass;
++  HoldLibrary, HoldCompanion: TLibHandle;
++  SetDefaultVerifyPaths: TSetDefaultVerifyPaths;
++  GetVerifyParam: TGetVerifyParam;
++  SetVerifyIP: TSetVerifyIP;
++  ClaimedSSL, ClaimedGnuTLS: Boolean;
++
++function TLSBackendName(Backend: TTLSBackend): String;
++begin Result:=policyunit.TLSBackendName(Backend) end;
++
++procedure CheckConfigurable;
++begin
++  if SelectionStarted then
++    raise ESmartTLS.Create('TLS selection has started; configuration is immutable');
++end;
++
++procedure SetSmartTLSBackend(Backend: TTLSBackend);
++begin
++  EnterCriticalSection(SelectionLock);
++  try CheckConfigurable; RequestedBackend:=Backend
++  finally LeaveCriticalSection(SelectionLock) end;
++end;
++
++function IsAbsolutePath(const Path: String): Boolean;
++begin
++  {$IFDEF WINDOWS}
++  Result:=((Length(Path)>=3) and (Path[2]=':') and (Path[3] in ['\','/'])) or
++    ((Length(Path)>2) and (Copy(Path,1,2)='\\'));
++  {$ELSE}
++  Result:=(Path<>'') and (Path[1]='/');
++  {$ENDIF}
++end;
++
++procedure SetSmartTLSLibraryPaths(const SSLPath, CryptoPath, GnuTLSPath: String);
++  procedure CheckPath(const Path: String);
++  begin
++    if (Path<>'') and not IsAbsolutePath(Path) then
++      raise ESmartTLS.Create('TLS library path must be absolute: '+Path);
++  end;
++begin
++  EnterCriticalSection(SelectionLock);
++  try
++    CheckConfigurable;
++    CheckPath(SSLPath); CheckPath(CryptoPath); CheckPath(GnuTLSPath);
++    if (SSLPath='')<>(CryptoPath='') then
++      raise ESmartTLS.Create('Configure both OpenSSL library paths');
++    ConfigSSL:=SSLPath; ConfigCrypto:=CryptoPath; ConfigGnuTLS:=GnuTLSPath;
++  finally LeaveCriticalSection(SelectionLock) end;
++end;
++
++function GetSmartTLSBackend: TTLSBackend;
++begin
++  EnterCriticalSection(SelectionLock);
++  try Result:=SelectedBackend finally LeaveCriticalSection(SelectionLock) end;
++end;
++
++function GetSmartTLSLibraryPath: String;
++begin
++  EnterCriticalSection(SelectionLock);
++  try Result:=SelectedPath finally LeaveCriticalSection(SelectionLock) end;
++end;
++
++function ApplicationDirectory: String;
++{$IFDEF WINDOWS}
++var Path: array[0..32767] of WideChar; N: Cardinal;
++{$ENDIF}
++begin
++  {$IFDEF WINDOWS}
++  N:=GetModuleFileNameW(0,@Path[0],Length(Path));
++  if (N=0) or (N>=Length(Path)) then raise ESmartTLS.Create('Cannot determine application path');
++  Result:=ExtractFilePath(UTF8Encode(UnicodeString(PWideChar(@Path[0]))));
++  {$ELSE}
++  // ParamStr(0) is the executable path on supported FPC Unix targets.
++  Result:=ExtractFilePath(ExpandFileName(ParamStr(0)));
++  {$ENDIF}
++end;
++
++{$IFDEF WINDOWS}
++procedure CheckArchitecture(const Path: String);
++var F: TFileStream; Signature: Cardinal; DOS: Word; Offset: LongInt; Machine, Expected: Word;
++begin
++  {$IFDEF CPUX86_64}Expected:=$8664;{$ELSE}
++  {$IFDEF CPUAARCH64}Expected:=$AA64;{$ELSE}Expected:=$014C;{$ENDIF}{$ENDIF}
++  F:=TFileStream.Create(Path,fmOpenRead or fmShareDenyWrite);
++  try
++    F.ReadBuffer(DOS,2);
++    if (DOS<>$5A4D) or (F.Size<64) then raise ESmartTLS.Create('Invalid PE library: '+Path);
++    F.Position:=$3C; F.ReadBuffer(Offset,4);
++    if (Offset<64) or (Int64(Offset)+6>F.Size) then raise ESmartTLS.Create('Invalid PE header: '+Path);
++    F.Position:=Offset; F.ReadBuffer(Signature,4); F.ReadBuffer(Machine,2);
++    if Signature<>$00004550 then raise ESmartTLS.Create('Invalid PE signature: '+Path);
++    if Machine<>Expected then raise ESmartTLS.Create('Wrong TLS library architecture: '+Path);
++  finally F.Free end;
++end;
++{$ENDIF}
++
++function LoadExactLibrary(const Path: String): TLibHandle;
++begin
++  if not IsAbsolutePath(Path) then raise ESmartTLS.Create('TLS library path is not absolute: '+Path);
++  {$IFDEF WINDOWS}
++  CheckArchitecture(Path);
++  // Restrict dependencies to the selected DLL directory and safe default
++  // directories. Older Windows without these flags reports a clear error.
++  Result:=TLibHandle(LoadLibraryExW(PWideChar(UTF8Decode(Path)),0,$00000100 or $00001000));
++  if Result=NilHandle then
++    raise ESmartTLS.CreateFmt('Cannot load TLS library %s (Windows error %d)',[Path,GetLastError]);
++  {$ELSE}
++  Result:=LoadLibrary(Path);
++  if Result=NilHandle then raise ESmartTLS.Create('Cannot load TLS library '+Path+': '+GetLoadErrorStr);
++  {$ENDIF}
++end;
++
++procedure RequireSymbols(Handle: TLibHandle; const Path: String; const Names: array of String);
++var I: Integer;
++begin
++  for I:=0 to High(Names) do
++    if GetProcedureAddress(Handle,Names[I])=nil then
++      raise ESmartTLS.Create('TLS library '+Path+' is missing required symbol '+Names[I]);
++end;
++
++procedure UnloadProbe(var Probe: TLibraryProbe);
++begin
++  if Probe.Handle<>NilHandle then UnloadLibrary(Probe.Handle);
++  if Probe.CompanionHandle<>NilHandle then UnloadLibrary(Probe.CompanionHandle);
++  Probe.Handle:=NilHandle; Probe.CompanionHandle:=NilHandle;
++end;
++
++function ProbeOpenSSL: TLibraryProbe;
++var Dir: String; I: Integer;
++begin
++  Result:=Default(TLibraryProbe);
++  Result.Path:=ConfigSSL; Result.Companion:=ConfigCrypto;
++  if Result.Path='' then
++    begin
++    Dir:=ApplicationDirectory;
++    {$IFDEF WINDOWS}
++    for I:=Low(SSL_DLL_Names) to High(SSL_DLL_Names) do
++      if FileExists(Dir+SSL_DLL_Names[I]+'.dll') or FileExists(Dir+Crypto_DLL_Names[I]+'.dll') then
++        begin
++        Result.Path:=Dir+SSL_DLL_Names[I]+'.dll';
++        Result.Companion:=Dir+Crypto_DLL_Names[I]+'.dll';
++        Break;
++        end;
++    {$ELSE}
++    for I:=0 to 2 do
++      begin
++      {$IFDEF DARWIN}
++      case I of
++        0: begin Result.Path:=Dir+'libssl.3.dylib'; Result.Companion:=Dir+'libcrypto.3.dylib' end;
++        1: begin Result.Path:=Dir+'libssl.1.1.dylib'; Result.Companion:=Dir+'libcrypto.1.1.dylib' end;
++        2: begin Result.Path:=Dir+'libssl.dylib'; Result.Companion:=Dir+'libcrypto.dylib' end;
++      end;
++      {$ELSE}
++      case I of
++        0: begin Result.Path:=Dir+'libssl.so.3'; Result.Companion:=Dir+'libcrypto.so.3' end;
++        1: begin Result.Path:=Dir+'libssl.so.1.1'; Result.Companion:=Dir+'libcrypto.so.1.1' end;
++        2: begin Result.Path:=Dir+'libssl.so'; Result.Companion:=Dir+'libcrypto.so' end;
++      end;
++      {$ENDIF}
++      if FileExists(Result.Path) or FileExists(Result.Companion) then Break;
++      Result.Path:=''; Result.Companion:='';
++      end;
++    {$ENDIF}
++    end;
++  if Result.Path='' then Exit;
++  // Explicit paths that do not exist are configuration errors, never absence.
++  Result.State:=lsInvalid;
++  try
++    if not FileExists(Result.Path) or not FileExists(Result.Companion) then
++      raise ESmartTLS.Create('Incomplete OpenSSL library pair: '+Result.Path+' / '+Result.Companion);
++    if IsSSLloaded then
++      raise ESmartTLS.Create('OpenSSL was initialized before smart selection; use one initialization owner');
++    Result.CompanionHandle:=LoadExactLibrary(Result.Companion);
++    RequireSymbols(Result.CompanionHandle,Result.Companion,
++      ['ERR_get_error','ERR_clear_error','ERR_error_string_n','X509_free','X509_VERIFY_PARAM_set1_ip_asc']);
++    Result.Handle:=LoadExactLibrary(Result.Path);
++    RequireSymbols(Result.Handle,Result.Path,
++      ['OPENSSL_init_ssl','TLS_method','SSL_CTX_new','SSL_CTX_free','SSL_CTX_ctrl',
++       'SSL_CTX_set_cipher_list','SSL_CTX_set_verify','SSL_CTX_set_default_passwd_cb',
++       'SSL_CTX_set_default_passwd_cb_userdata','SSL_CTX_set_default_verify_paths',
++       'SSL_CTX_load_verify_locations','SSL_new','SSL_free','SSL_set_fd',
++       'SSL_ctrl','SSL_get0_param','SSL_set1_host','SSL_connect','SSL_get_error','SSL_read',
++       'SSL_write','SSL_pending','SSL_shutdown','SSL_get_verify_result']);
++    Result.State:=lsReady;
++  except
++    on E: Exception do
++      begin Result.ErrorText:='Invalid TLS library '+Result.Path+': '+E.Message; UnloadProbe(Result) end;
++  end;
++end;
++
++function ProbeGnuTLS: TLibraryProbe;
++var Dir: String;
++begin
++  Result:=Default(TLibraryProbe);
++  Result.Path:=ConfigGnuTLS;
++  if Result.Path='' then
++    begin
++    Dir:=ApplicationDirectory;
++    {$IFDEF WINDOWS}
++    if FileExists(Dir+'libgnutls-30.dll') then Result.Path:=Dir+'libgnutls-30.dll'
++    else if FileExists(Dir+'libgnutls.dll') then Result.Path:=Dir+'libgnutls.dll';
++    {$ELSE}
++    {$IFDEF DARWIN}
++    if FileExists(Dir+'libgnutls.30.dylib') then Result.Path:=Dir+'libgnutls.30.dylib'
++    else if FileExists(Dir+'libgnutls.dylib') then Result.Path:=Dir+'libgnutls.dylib';
++    {$ELSE}
++    if FileExists(Dir+'libgnutls.so.30') then Result.Path:=Dir+'libgnutls.so.30'
++    else if FileExists(Dir+'libgnutls.so') then Result.Path:=Dir+'libgnutls.so';
++    {$ENDIF}{$ENDIF}
++    end;
++  if Result.Path='' then Exit;
++  Result.State:=lsInvalid;
++  try
++    if not FileExists(Result.Path) then raise ESmartTLS.Create('GnuTLS library is absent: '+Result.Path);
++    if GnuTLSloaded then
++      raise ESmartTLS.Create('GnuTLS was initialized before smart selection; use one initialization owner');
++    Result.Handle:=LoadExactLibrary(Result.Path);
++    RequireSymbols(Result.Handle,Result.Path,
++      ['gnutls_global_init','gnutls_init','gnutls_deinit','gnutls_bye','gnutls_handshake',
++       'gnutls_handshake_set_timeout','gnutls_priority_set_direct','gnutls_server_name_set',
++       'gnutls_session_set_verify_cert','gnutls_session_get_verify_cert_status',
++       'gnutls_certificate_allocate_credentials','gnutls_certificate_free_credentials',
++       'gnutls_certificate_set_x509_system_trust','gnutls_credentials_set',
++       'gnutls_transport_set_int2','gnutls_record_send','gnutls_record_recv',
++       'gnutls_record_check_pending','gnutls_error_is_fatal','gnutls_strerror']);
++    Result.State:=lsReady;
++  except
++    on E: Exception do
++      begin Result.ErrorText:='Invalid TLS library '+Result.Path+': '+E.Message; UnloadProbe(Result) end;
++  end;
++end;
++
++function TSmartOpenSSLHandler.CreateSSLContext(AType: TSSLType): TSSLContext;
++begin
++  Result:=inherited CreateSSLContext(AType);
++  if VerifyPeerCert and (SetDefaultVerifyPaths(Result.CTX)<>1) then
++    begin Result.Free; raise ESmartTLS.Create('OpenSSL default trust paths could not be loaded') end;
++end;
++
++function RequirePeerHost(Handler: TSSLSocketHandler): String;
++begin
++  if not (Handler.Socket is TInetSocket) then
++    raise ESmartTLS.Create('smartsslsockets requires a named TCP peer');
++  Result:=TInetSocket(Handler.Socket).NetworkAddress.Address;
++  if (Result<>'') and (Result[Length(Result)]='.') then Delete(Result,Length(Result),1);
++  if (Result='') or (Pos(#0,Result)>0) then
++    raise ESmartTLS.Create('TLS peer hostname is empty or contains NUL');
++end;
++
++procedure TSmartOpenSSLHandler.ConfigurePeerIdentity(const HostName: AnsiString);
++var IP4: in_addr; IP6: in6_addr; R: Integer;
++begin
++  // 1.1.1 SSL_set1_host only configures DNS matching. IP SANs have their
++  // own verification API; use it explicitly on every supported version.
++  if TryStrToHostAddr(HostName,IP4) or TryStrToHostAddr6(HostName,IP6) then
++    R:=SetVerifyIP(GetVerifyParam(SSL.SSL),PAnsiChar(HostName))
++  else R:=SSL.Set1Host(HostName);
++  if R<>1 then raise ESmartTLS.Create('OpenSSL could not enable peer identity verification');
++end;
++
++function TSmartGnuTLSHandler.Connect: Boolean;
++begin
++  RequirePeerHost(Self);
++  // The existing client calls gnutls_session_set_verify_cert with the peer
++  // name after setting priorities, and initializes system trust by default.
++  Result:=inherited Connect;
++  if Result and VerifyPeerCert and (gnutls_session_get_verify_cert_status(Session)<>0) then
++    begin
++    SetSSLActive(False);
++    Result:=CheckOK(GNUTLS_E_CERTIFICATE_VERIFICATION_ERROR);
++    end;
++end;
++
++function TSmartOpenSSLHandler.Connect: Boolean;
++begin
++  RequirePeerHost(Self);
++  Result:=inherited Connect;
++end;
++
++function TSmartGnuTLSHandler.Accept: Boolean;
++begin
++  raise ESmartTLS.Create('smartsslsockets is client-only; select an explicit server backend');
++  Result:=False;
++end;
++
++function TSmartOpenSSLHandler.Accept: Boolean;
++begin
++  raise ESmartTLS.Create('smartsslsockets is client-only; select an explicit server backend');
++  Result:=False;
++end;
++
++function SmartHandlerClass: TSSLSocketHandlerClass;
++var SSLProbe, GnuProbe: TLibraryProbe; Native, Chosen: TTLSBackend;
++begin
++  // Also initialize handles on the cached fast path: the finally block runs
++  // when an already-selected factory exits, including on other threads.
++  SSLProbe:=Default(TLibraryProbe); GnuProbe:=Default(TLibraryProbe);
++  EnterCriticalSection(SelectionLock);
++  try
++    if SelectionStarted then
++      begin
++      if SelectionError<>'' then raise ESmartTLS.Create(SelectionError);
++      Exit(SelectedClass);
++      end;
++    SelectionStarted:=True;
++    SSLProbe:=Default(TLibraryProbe); GnuProbe:=Default(TLibraryProbe);
++    {$IFDEF WINDOWS}Native:=tbSchannel;{$ELSE}Native:=tbAuto;{$ENDIF}
++    try
++      if RequestedBackend in [tbAuto,tbOpenSSL] then SSLProbe:=ProbeOpenSSL;
++      if (RequestedBackend=tbGnuTLS) or
++         ((RequestedBackend=tbAuto) and (SSLProbe.State=lsAbsent)) then GnuProbe:=ProbeGnuTLS;
++      if SSLProbe.State=lsInvalid then raise ESmartTLS.Create(SSLProbe.ErrorText);
++      if GnuProbe.State=lsInvalid then raise ESmartTLS.Create(GnuProbe.ErrorText);
++      Chosen:=ChooseTLSBackend(RequestedBackend,SSLProbe.State,GnuProbe.State,Native);
++      case Chosen of
++        tbOpenSSL:
++          begin
++          // Probe handles pin the checked modules while the existing bindings
++          // initialize with the exact paths. No default loader search is used.
++          if not AcquireSSLInterface(SSLProbe.Path,SSLProbe.Companion,
++            SSLProbe.Handle,SSLProbe.CompanionHandle) then
++            raise ESmartTLS.Create('Checked OpenSSL library pair failed initialization or another module owns the binding');
++          ClaimedSSL:=True;
++          Pointer(SetDefaultVerifyPaths):=GetProcedureAddress(SSLProbe.Handle,'SSL_CTX_set_default_verify_paths');
++          Pointer(GetVerifyParam):=GetProcedureAddress(SSLProbe.Handle,'SSL_get0_param');
++          Pointer(SetVerifyIP):=GetProcedureAddress(SSLProbe.CompanionHandle,'X509_VERIFY_PARAM_set1_ip_asc');
++          HoldLibrary:=SSLProbe.Handle; HoldCompanion:=SSLProbe.CompanionHandle;
++          SSLProbe.Handle:=NilHandle; SSLProbe.CompanionHandle:=NilHandle;
++          SelectedPath:=SSLProbe.Path;
++          SelectedClass:=TSmartOpenSSLHandler;
++          end;
++        tbGnuTLS:
++          begin
++          AcquireGnuTLS(GnuProbe.Path,GnuProbe.Handle);
++          ClaimedGnuTLS:=True;
++          if gnutls_global_init()<0 then raise ESmartTLS.Create('GnuTLS global initialization failed');
++          HoldLibrary:=GnuProbe.Handle; GnuProbe.Handle:=NilHandle;
++          SelectedPath:=GnuProbe.Path;
++          SelectedClass:=TSmartGnuTLSHandler;
++          end;
++        {$IFDEF WINDOWS}tbSchannel: SelectedClass:=TSchannelSocketHandler;{$ENDIF}
++      else raise ESmartTLS.Create('Native TLS connection adapter is not implemented on this platform');
++      end;
++      SelectedBackend:=Chosen;
++      Result:=SelectedClass;
++    except
++      on E: Exception do
++        begin
++        SelectionError:=E.Message;
++        raise ESmartTLS.Create(SelectionError);
++        end;
++    end;
++  finally
++    UnloadProbe(SSLProbe); UnloadProbe(GnuProbe);
++    LeaveCriticalSection(SelectionLock);
++  end;
++end;
++
++initialization
++  InitCriticalSection(SelectionLock);
++  TSSLSocketHandler.SetDefaultHandlerFactory(@SmartHandlerClass);
++finalization
++  // Do not reset/unload the existing backend bindings or another unit's state.
++  if ClaimedSSL then ReleaseSSLInterfaceClaim;
++  if ClaimedGnuTLS then ReleaseGnuTLSClaim;
++  if HoldLibrary<>NilHandle then UnloadLibrary(HoldLibrary);
++  if HoldCompanion<>NilHandle then UnloadLibrary(HoldCompanion);
++  DoneCriticalSection(SelectionLock);
++end.
+diff --git a/packages/fcl-tls/src/tlsbackendpolicy.pp b/packages/fcl-tls/src/tlsbackendpolicy.pp
+new file mode 100644
+index 0000000000..d0f5d95298
+--- /dev/null
++++ b/packages/fcl-tls/src/tlsbackendpolicy.pp
+@@ -0,0 +1,61 @@
++{
++    This file is part of the Free Component Library (FCL).
++    See COPYING.FPC for details about the copyright.
++}
++{$IFNDEF FPC_DOTTEDUNITS}
++unit tlsbackendpolicy;
++{$ENDIF}
++{$mode objfpc}{$H+}
++interface
++{$IFDEF FPC_DOTTEDUNITS}
++uses System.SysUtils;
++{$ELSE}
++uses SysUtils;
++{$ENDIF}
++type
++  TTLSBackend = (tbAuto, tbOpenSSL, tbGnuTLS, tbSchannel, tbNetworkFramework);
++  TTLSLibraryState = (lsAbsent, lsReady, lsInvalid);
++  ETLSBackendSelection = class(Exception);
++
++function TLSBackendName(Backend: TTLSBackend): String;
++function ChooseTLSBackend(OverrideBackend: TTLSBackend;
++  OpenSSLState, GnuTLSState: TTLSLibraryState; NativeBackend: TTLSBackend): TTLSBackend;
++
++implementation
++function TLSBackendName(Backend: TTLSBackend): String;
++const Names: array[TTLSBackend] of String =
++  ('auto', 'OpenSSL', 'GnuTLS', 'Schannel', 'Network.framework');
++begin
++  Result:=Names[Backend];
++end;
++
++function ChooseTLSBackend(OverrideBackend: TTLSBackend;
++  OpenSSLState, GnuTLSState: TTLSLibraryState; NativeBackend: TTLSBackend): TTLSBackend;
++  procedure RequireLibrary(State: TTLSLibraryState; Backend: TTLSBackend);
++  begin
++    case State of
++      lsAbsent: raise ETLSBackendSelection.Create(TLSBackendName(Backend)+' library is absent');
++      lsInvalid: raise ETLSBackendSelection.Create(TLSBackendName(Backend)+' library is invalid');
++    end;
++  end;
++begin
++  Result:=OverrideBackend;
++  case OverrideBackend of
++    tbOpenSSL: RequireLibrary(OpenSSLState,tbOpenSSL);
++    tbGnuTLS: RequireLibrary(GnuTLSState,tbGnuTLS);
++    tbSchannel, tbNetworkFramework:
++      if NativeBackend<>OverrideBackend then
++        raise ETLSBackendSelection.Create(TLSBackendName(OverrideBackend)+' is unavailable');
++    tbAuto:
++      begin
++      if OpenSSLState<>lsAbsent then
++        begin RequireLibrary(OpenSSLState,tbOpenSSL); Exit(tbOpenSSL) end;
++      if GnuTLSState<>lsAbsent then
++        begin RequireLibrary(GnuTLSState,tbGnuTLS); Exit(tbGnuTLS) end;
++      if NativeBackend=tbAuto then
++        raise ETLSBackendSelection.Create('No TLS backend is available');
++      Result:=NativeBackend;
++      end;
++  end;
++end;
++end.
+diff --git a/packages/fcl-tls/tests/macos/networkframework-api.c b/packages/fcl-tls/tests/macos/networkframework-api.c
+new file mode 100644
+index 0000000000..8117f72ea2
+--- /dev/null
++++ b/packages/fcl-tls/tests/macos/networkframework-api.c
+@@ -0,0 +1,53 @@
++/* API/Blocks construction probe, not a Pascal TLS implementation or TLS test.
++ * Part of FCL; see COPYING.FPC. No connection is started by this program. */
++#include <Network/Network.h>
++#include <Security/SecProtocolOptions.h>
++#include <dispatch/dispatch.h>
++#include <stdbool.h>
++#include <stdio.h>
++
++static int probe(bool verify_peer)
++{
++    dispatch_queue_t queue = dispatch_queue_create("fpc.tls.api-probe", DISPATCH_QUEUE_SERIAL);
++    nw_parameters_t parameters = nw_parameters_create_secure_tcp(
++        ^(nw_protocol_options_t tls_options) {
++            sec_protocol_options_t security = nw_tls_copy_sec_protocol_options(tls_options);
++            /* True keeps the platform verification policy. False is an explicit
++             * per-connection option; neither mode changes protocol versions. */
++            if (!verify_peer) {
++                sec_protocol_options_set_verify_block(security,
++                    ^(sec_protocol_metadata_t metadata, sec_trust_t trust,
++                      sec_protocol_verify_complete_t complete) {
++                        (void)metadata;
++                        (void)trust;
++                        complete(true);
++                    }, queue);
++            }
++            sec_release(security);
++        }, NW_PARAMETERS_DEFAULT_CONFIGURATION);
++    nw_endpoint_t endpoint = nw_endpoint_create_host("localhost", "443");
++    nw_connection_t connection = nw_connection_create(endpoint, parameters);
++    int result = (queue && parameters && endpoint && connection) ? 0 : 1;
++    if (connection) {
++        nw_connection_set_queue(connection, queue);
++        nw_connection_set_state_changed_handler(connection,
++            ^(nw_connection_state_t state, nw_error_t error) {
++                (void)state;
++                (void)error;
++            });
++        /* Deliberately no nw_connection_start: this checks construction only. */
++        nw_release(connection);
++    }
++    if (endpoint) nw_release(endpoint);
++    if (parameters) nw_release(parameters);
++    if (queue) dispatch_release(queue);
++    return result;
++}
++
++int main(void)
++{
++    if (probe(true) || probe(false)) return 1;
++    puts("PASS Network.framework API/Blocks construction; no TCP/TLS connection started");
++    puts("NOT RUN Pascal backend, HTTPS, trust/hostname, cancellation or callback-lifetime tests");
++    return 0;
++}
+diff --git a/packages/fcl-tls/tests/run.ps1 b/packages/fcl-tls/tests/run.ps1
+new file mode 100644
+index 0000000000..0122cd10ab
+--- /dev/null
++++ b/packages/fcl-tls/tests/run.ps1
+@@ -0,0 +1,95 @@
++param(
++    [string]$Compiler,
++    [string]$OutputDirectory = (Join-Path $env:TEMP 'fpc-native-tls-tests'),
++    [string]$Python = 'python',
++    [string]$OpenSSLLibrary,
++    [string]$CryptoLibrary,
++    [string]$OpenSSLCAFile,
++    [string]$OpenSSLExecutable,
++    [switch]$Online
++)
++$ErrorActionPreference = 'Stop'
++$SourceRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
++if (-not $Compiler) { $Compiler = Join-Path $SourceRoot 'compiler\ppcx64.exe' }
++$Compiler = (Resolve-Path -LiteralPath $Compiler).Path
++New-Item -ItemType Directory -Force -Path $OutputDirectory | Out-Null
++$OutputDirectory = (Resolve-Path -LiteralPath $OutputDirectory).Path
++$Log = Join-Path $OutputDirectory 'results.log'
++Set-Content -LiteralPath $Log -Encoding utf8 -Value ('FPC native TLS tests ' + (Get-Date -Format o))
++$Failures = [System.Collections.Generic.List[string]]::new()
++function Run-TestCommand([string]$Name, [string]$Executable, [string[]]$CommandArgs) {
++    ('RUN ' + $Name) | Tee-Object -FilePath $Log -Append
++    try {
++        & $Executable @CommandArgs 2>&1 | Tee-Object -FilePath $Log -Append
++        if ($LASTEXITCODE -ne 0) { throw ('Exit code ' + $LASTEXITCODE) }
++    } catch {
++        $Failures.Add($Name)
++        ('FAIL ' + $Name + ': ' + $_.Exception.Message) | Tee-Object -FilePath $Log -Append
++    }
++}
++Push-Location $SourceRoot
++try {
++    $BuildOptions = @('-n', '-gl', ('-FU' + $OutputDirectory), ('-FE' + $OutputDirectory))
++    foreach ($Relative in @('rtl\units\x86_64-win64', 'packages\fcl-net\src',
++        'packages\rtl-objpas\src\inc', 'packages\rtl-extra\src\win',
++        'packages\fcl-base\src', 'packages\fcl-web\src\base',
++        'packages\openssl\src', 'packages\gnutls\src', 'packages\fcl-tls\src')) {
++        $BuildOptions += '-Fu' + (Join-Path $SourceRoot $Relative)
++    }
++    foreach ($Relative in @('packages\fcl-net\src\win', 'packages\rtl-extra\src\inc')) {
++        $BuildOptions += '-Fi' + (Join-Path $SourceRoot $Relative)
++    }
++    foreach ($Program in @('testpolicy','testfactory','testsmart','testschannel','testtransport','testbinding','testsmartclient','testopensslpeer','testverifyoptions','tlsstub')) {
++        Run-TestCommand ('compile ' + $Program) $Compiler ($BuildOptions + (Join-Path $PSScriptRoot ($Program + '.pp')))
++    }
++    if ($Failures.Count -gt 0) { throw 'Compilation failed; stop before running stale binaries' }
++    Run-TestCommand 'policy' (Join-Path $OutputDirectory 'testpolicy.exe') @()
++    Run-TestCommand 'factory' (Join-Path $OutputDirectory 'testfactory.exe') @()
++    Run-TestCommand 'concurrent native factory' (Join-Path $OutputDirectory 'testsmart.exe') @('race')
++    Run-TestCommand 'native construction and Accept' (Join-Path $OutputDirectory 'testschannel.exe') @()
++    Run-TestCommand 'SSPI state machine' $Python @((Join-Path $PSScriptRoot 'teststates.py'), $Compiler, (Join-Path $OutputDirectory 'state-tests'))
++    if ($OpenSSLLibrary -and $CryptoLibrary) {
++        Run-TestCommand 'loader matrix' $Python @((Join-Path $PSScriptRoot 'testloader.py'),
++            (Join-Path $OutputDirectory 'testsmart.exe'), (Join-Path $OutputDirectory 'tlsstub.dll'),
++            (Resolve-Path -LiteralPath $OpenSSLLibrary).Path, (Resolve-Path -LiteralPath $CryptoLibrary).Path, '--binding', (Join-Path $OutputDirectory 'testbinding.exe'))
++    } else { 'NOT RUN loader matrix: supply an existing OpenSSL pair' | Tee-Object -FilePath $Log -Append }
++    if ($OpenSSLLibrary -and $CryptoLibrary -and $OpenSSLExecutable) {
++        Run-TestCommand 'local real TLS matrix' $Python @((Join-Path $PSScriptRoot 'testlocaltls.py'),
++            (Join-Path $OutputDirectory 'testopensslpeer.exe'), (Join-Path $OutputDirectory 'testsmartclient.exe'),
++            (Resolve-Path -LiteralPath $OpenSSLExecutable).Path, $OpenSSLLibrary, $CryptoLibrary,
++            (Join-Path $OutputDirectory 'local-tls'), '--options-client',
++            (Join-Path $OutputDirectory 'testverifyoptions.exe'))
++    } else { 'NOT RUN local real TLS matrix: supply existing libraries and -OpenSSLExecutable' | Tee-Object -FilePath $Log -Append }
++    Run-TestCommand 'handshake timeout'  $Python @((Join-Path $PSScriptRoot 'tlsrelay.py'),
++        (Join-Path $OutputDirectory 'testtransport.exe'), '--mode', 'stall')
++    if ($Online) {
++        $HTTPExe = Join-Path $OutputDirectory 'testschannel.exe'
++        Run-TestCommand 'trusted HTTPS' $HTTPExe @('https://example.com/')
++        Run-TestCommand 'wrong hostname' $HTTPExe @('https://wrong.host.badssl.com/','reject','80090322')
++        Run-TestCommand 'expired certificate' $HTTPExe @('https://expired.badssl.com/','reject','80090328')
++        Run-TestCommand 'self-signed certificate' $HTTPExe @('https://self-signed.badssl.com/','reject','80090325')
++        Run-TestCommand 'untrusted root' $HTTPExe @('https://untrusted-root.badssl.com/','reject','80090325')
++        foreach ($Mode in @('large','upload','timeout')) {
++            Run-TestCommand ('TLS transport ' + $Mode) $Python @((Join-Path $PSScriptRoot 'tlsrelay.py'),
++                (Join-Path $OutputDirectory 'testtransport.exe'), '--mode', $Mode)
++        }
++        if ($OpenSSLLibrary -and $CryptoLibrary -and $OpenSSLCAFile) {
++            $PreviousCAFile = $env:SSL_CERT_FILE
++            try {
++                $env:SSL_CERT_FILE = (Resolve-Path -LiteralPath $OpenSSLCAFile).Path
++                foreach ($URL in @('https://example.com/', 'https://1.1.1.1/',
++                    'https://wrong.host.badssl.com/', 'https://expired.badssl.com/',
++                    'https://self-signed.badssl.com/', 'https://untrusted-root.badssl.com/')) {
++                    $ClientArgs = @($OpenSSLLibrary, $CryptoLibrary, $URL)
++                    if ($URL -like '*badssl.com*') { $ClientArgs += 'reject' }
++                    Run-TestCommand ('smart OpenSSL ' + $URL) (Join-Path $OutputDirectory 'testsmartclient.exe') $ClientArgs
++                }
++            } finally { $env:SSL_CERT_FILE = $PreviousCAFile }
++        } else { 'NOT RUN OpenSSL certificate tests: supply existing libraries and -OpenSSLCAFile' | Tee-Object -FilePath $Log -Append }
++        Run-TestCommand 'TLS 1.2 fragmented transport'  $Python @((Join-Path $PSScriptRoot 'tlsrelay.py'),
++            (Join-Path $OutputDirectory 'testtransport.exe'), '--tls12')
++    } else { 'NOT RUN online certificate and transport tests: pass -Online' | Tee-Object -FilePath $Log -Append }
++    ('Failures: ' + ($Failures -join ', ')) | Tee-Object -FilePath $Log -Append
++} finally { Pop-Location }
++if ($Failures.Count) { exit 1 }
++exit 0
+diff --git a/packages/fcl-tls/tests/testbinding.pp b/packages/fcl-tls/tests/testbinding.pp
+new file mode 100644
+index 0000000000..c205fdfb0f
+--- /dev/null
++++ b/packages/fcl-tls/tests/testbinding.pp
+@@ -0,0 +1,60 @@
++program testbinding;
++{$mode objfpc}{$H+}
++uses Classes, SysUtils, DynLibs, openssl, gnutls;
++type
++  TInitializer = class(TThread)
++    ErrorText: String;
++    procedure Execute; override;
++  end;
++var SSLHandle, CryptoHandle, StubHandle: TLibHandle;
++    Worker: TInitializer; Acquired: Boolean; I: Integer;
++procedure Check(Value: Boolean; const Msg: String);
++begin if not Value then raise Exception.Create(Msg) end;
++procedure TInitializer.Execute;
++begin
++  try Check(InitSSLInterface(ParamStr(3),ParamStr(4)),'Legacy initialization failed')
++  except on E: Exception do ErrorText:=E.Message end;
++end;
++begin
++  SSLHandle:=LoadLibrary(ParamStr(1));
++  CryptoHandle:=LoadLibrary(ParamStr(2));
++  StubHandle:=LoadLibrary(ParamStr(5));
++  Check((SSLHandle<>NilHandle) and (CryptoHandle<>NilHandle) and (StubHandle<>NilHandle),'Fixture load failed');
++  try
++    // Both orders: another owner wins, or the checked modules win.
++    Check(InitSSLInterface(ParamStr(3),ParamStr(4)),'Other module load failed');
++    Check(not AcquireSSLInterface(ParamStr(1),ParamStr(2),SSLHandle,CryptoHandle),
++      'Claim silently reused another OpenSSL module');
++    Check(DestroySSLInterface,'Unclaimed binding must remain destroyable');
++    for I:=1 to 50 do
++      begin
++      Worker:=TInitializer.Create(True);
++      try
++        Worker.Start;
++        Acquired:=AcquireSSLInterface(ParamStr(1),ParamStr(2),SSLHandle,CryptoHandle);
++        Worker.WaitFor;
++        Check(Worker.ErrorText='',Worker.ErrorText);
++        if Acquired then
++          begin
++          Check((SSLLibHandle=SSLHandle) and (SSLUtilHandle=CryptoHandle),'Cross-module binding');
++          Check(not DestroySSLInterface,'Claimed OpenSSL binding was destroyed');
++          ReleaseSSLInterfaceClaim;
++          end
++        else Check(SSLLibHandle<>SSLHandle,'Failed claim on matching module');
++      finally Worker.Free end;
++      Check(DestroySSLInterface,'Binding release failed');
++      end;
++    // This harmless stub tests loader ownership only, not GnuTLS crypto.
++    AcquireGnuTLS(ParamStr(5),StubHandle);
++    try
++      try FreeGnuTLS; raise Exception.Create('Claimed GnuTLS was unloaded')
++      except on E: Exception do if Pos('claimed',E.Message)=0 then raise end;
++      try LoadGnuTLS(ParamStr(1)); raise Exception.Create('Claimed GnuTLS was replaced')
++      except on E: Exception do if Pos('claimed',E.Message)=0 then raise end;
++      try AcquireGnuTLS(ParamStr(1),SSLHandle); raise Exception.Create('Mismatched GnuTLS claim accepted')
++      except on E: Exception do if Pos('another module',E.Message)=0 then raise end;
++    finally ReleaseGnuTLSClaim; FreeGnuTLS end;
++    Check(not GnuTLSloaded,'Unclaimed GnuTLS release failed');
++    Writeln('PASS binding ownership and 50 competing initializations');
++  finally UnloadLibrary(SSLHandle); UnloadLibrary(CryptoHandle); UnloadLibrary(StubHandle) end;
++end.
+diff --git a/packages/fcl-tls/tests/testfactory.pp b/packages/fcl-tls/tests/testfactory.pp
+new file mode 100644
+index 0000000000..15e78cbeea
+--- /dev/null
++++ b/packages/fcl-tls/tests/testfactory.pp
+@@ -0,0 +1,39 @@
++program testfactory;
++{$mode objfpc}{$H+}
++uses SysUtils, sslsockets, sslbase;
++type
++  TClient = class(TSSLSocketHandler)
++  protected
++    function GetLastSSLErrorString: String; override;
++    function GetLastSSLErrorCode: Integer; override;
++  public
++    function CreateCertGenerator: TX509Certificate; override;
++  end;
++var Calls: Integer; H: TSSLSocketHandler;
++function TClient.GetLastSSLErrorString: String;
++begin Result:='' end;
++function TClient.GetLastSSLErrorCode: Integer;
++begin Result:=0 end;
++function TClient.CreateCertGenerator: TX509Certificate;
++begin Result:=nil end;
++function Factory: TSSLSocketHandlerClass;
++begin Inc(Calls); Result:=TClient end;
++begin
++  TSSLSocketHandler.SetDefaultHandlerFactory(@Factory);
++  if Calls<>0 then raise Exception.Create('Factory must be lazy');
++  H:=TSSLSocketHandler.GetDefaultHandler;
++  try
++    if not (H is TClient) then raise Exception.Create('Factory class');
++    H.RemoteHostName:='example.com';
++    try
++      H.CreateSelfSignedCertificate;
++      raise Exception.Create('Missing generator must fail explicitly');
++    except on E: ESSLSocketError do ; end;
++  finally H.Free end;
++  if Calls<>1 then raise Exception.Create('Factory not called');
++  TSSLSocketHandler.SetDefaultHandlerClass(TClient);
++  H:=TSSLSocketHandler.GetDefaultHandler;
++  H.Free;
++  if Calls<>1 then raise Exception.Create('Explicit class must clear factory');
++  Writeln('PASS factory');
++end.
+diff --git a/packages/fcl-tls/tests/testloader.py b/packages/fcl-tls/tests/testloader.py
+new file mode 100644
+index 0000000000..ec9eb23ad5
+--- /dev/null
++++ b/packages/fcl-tls/tests/testloader.py
+@@ -0,0 +1,89 @@
++"""Windows smart-loader tests using isolated application directories.
++
++Requires the compiled testsmart.exe, tlsstub.dll, and an existing real OpenSSL
++pair. Does not install or download libraries; does not touch DLLs in the source.
++"""
++import argparse
++from pathlib import Path
++import shutil
++import struct
++import subprocess
++import tempfile
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("exe", type=Path)
++    parser.add_argument("stub", type=Path)
++    parser.add_argument("ssl", type=Path)
++    parser.add_argument("crypto", type=Path)
++    parser.add_argument("--binding", type=Path)
++    args = parser.parse_args()
++    checks = 0
++    with tempfile.TemporaryDirectory(prefix="fpc-tls-loader-") as temp:
++        root = Path(temp)
++
++        def case(name, libraries, mode="", expected="SELECTED Schannel", success=True, extra=()):
++            nonlocal checks
++            directory = root / name
++            directory.mkdir()
++            exe = directory / "testsmart.exe"
++            shutil.copy2(args.exe, exe)
++            for destination, source in libraries.items():
++                if isinstance(source, bytes):
++                    (directory / destination).write_bytes(source)
++                else:
++                    shutil.copy2(source, directory / destination)
++            # CWD deliberately differs from the application directory.
++            result = subprocess.run([str(exe), mode, *extra], cwd=root, text=True, capture_output=True, timeout=20)
++            if (result.returncode == 0) != success or expected not in result.stdout:
++                raise AssertionError(f"{name}: rc={result.returncode}\n{result.stdout}\n{result.stderr}")
++            checks += 1
++            print("PASS", name)
++
++        if args.binding:
++            first = root / 'binding-first'
++            second = root / 'binding-second'
++            first.mkdir()
++            second.mkdir()
++            for directory in (first, second):
++                shutil.copy2(args.ssl, directory / args.ssl.name)
++                shutil.copy2(args.crypto, directory / args.crypto.name)
++            binding = subprocess.run([str(args.binding), str(first / args.ssl.name),
++                str(first / args.crypto.name), str(second / args.ssl.name),
++                str(second / args.crypto.name), str(args.stub)], text=True,
++                capture_output=True, timeout=30)
++            if binding.returncode or 'PASS binding ownership' not in binding.stdout:
++                raise AssertionError(f'binding ownership: {binding.returncode}\n{binding.stdout}\n{binding.stderr}')
++            print('PASS binding ownership and 50 competing initializations')
++        pair = {args.ssl.name: args.ssl, args.crypto.name: args.crypto}
++        case("absent", {}, "race")
++        case("cwd-library-ignored", {})
++        # Only the application directory is searched, even if CWD contains a DLL.
++        (root / args.ssl.name).write_bytes(b"bad library in cwd")
++        case("cwd-library-still-ignored", {})
++        case("corrupt-pair", {args.ssl.name: b"broken", args.crypto.name: b"broken"}, expected="TLS library", success=False)
++        case("incomplete-pair", {args.ssl.name: args.ssl}, expected="Incomplete OpenSSL", success=False)
++        case("missing-ssl-symbol", {args.ssl.name: args.stub, args.crypto.name: args.crypto}, expected="missing required symbol OPENSSL_init_ssl", success=False)
++        case("missing-crypto-symbol", {args.ssl.name: args.ssl, args.crypto.name: args.stub}, expected="missing required symbol ERR_get_error", success=False)
++        case("missing-gnutls-symbol", {"libgnutls-30.dll": args.stub}, expected="missing required symbol gnutls_global_init", success=False)
++        # Minimal PE header lets the architecture guard run before LoadLibrary.
++        wrong = bytearray(128)
++        struct.pack_into("<H", wrong, 0, 0x5A4D)
++        struct.pack_into("<I", wrong, 0x3C, 64)
++        struct.pack_into("<IH", wrong, 64, 0x4550, 0x14C)
++        case("wrong-architecture", {args.ssl.name: args.ssl, args.crypto.name: bytes(wrong)}, expected="Wrong TLS library architecture", success=False)
++        case("concurrent-openssl", pair, "raceopenssl", expected="SELECTED OpenSSL")
++        case("openssl-priority", {**pair, "libgnutls-30.dll": args.stub}, expected="SELECTED OpenSSL")
++        case("explicit-native", {args.ssl.name: b"broken", args.crypto.name: b"broken", "libgnutls-30.dll": args.stub}, "native")
++        case("explicit-openssl-absent", {}, "openssl", expected="OpenSSL library is absent", success=False)
++        case("explicit-gnutls-bypasses-openssl", {args.ssl.name: b"broken", args.crypto.name: b"broken", "libgnutls-30.dll": args.stub}, "gnutls", expected="missing required symbol gnutls_global_init", success=False)
++        case("relative-path-rejected", {}, "relative", expected="path must be absolute", success=False)
++        case("preinitialized-openssl", pair, "preloaded", expected="initialized before smart selection", success=False,
++             extra=(str((root / "preinitialized-openssl" / args.ssl.name)), str((root / "preinitialized-openssl" / args.crypto.name))))
++        case("explicit-class-compatible", {}, "explicitclass", expected="PASS explicit handler registration")
++    print(f"PASS loader {checks}")
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/packages/fcl-tls/tests/testlocaltls.py b/packages/fcl-tls/tests/testlocaltls.py
+new file mode 100644
+index 0000000000..6139340633
+--- /dev/null
++++ b/packages/fcl-tls/tests/testlocaltls.py
+@@ -0,0 +1,246 @@
++"""Real local TLS/chain tests using an existing OpenSSL CLI and Python ssl.
++
++All keys and CA files are disposable test material in the requested output
++directory. Only each child client's SSL_CERT_FILE is set; no certificate store,
++software installation, DNS/hosts file or account setting is modified.
++"""
++import argparse
++from datetime import datetime, timedelta, timezone
++import json
++import os
++from pathlib import Path
++import socket
++import ssl
++import subprocess
++import threading
++
++
++def main():
++    p = argparse.ArgumentParser()
++    p.add_argument('peer', type=Path)
++    p.add_argument('httpclient', type=Path)
++    p.add_argument('openssl', type=Path)
++    p.add_argument('ssl_library', type=Path)
++    p.add_argument('crypto_library', type=Path)
++    p.add_argument('output', type=Path)
++    p.add_argument('--options-client', type=Path)
++    args = p.parse_args()
++    for name in ('peer', 'httpclient', 'openssl', 'ssl_library', 'crypto_library'):
++        setattr(args, name, getattr(args, name).resolve())
++    for value in (args.peer, args.httpclient, args.openssl, args.ssl_library, args.crypto_library):
++        if not value.is_file():
++            raise SystemExit(f'Existing fixture/tool is missing: {value}')
++    if not ssl.HAS_TLSv1_3:
++        raise SystemExit('Python server must support TLS 1.3 to run the complete fixture matrix')
++    args.output.mkdir(parents=True, exist_ok=True)
++    root = args.output.resolve()
++    log = root / 'results.json'
++    results = []
++
++    def openssl(*parts):
++        command = [str(args.openssl), *map(str, parts)]
++        completed = subprocess.run(command, text=True, capture_output=True, timeout=30)
++        if completed.returncode:
++            raise RuntimeError(f'OpenSSL fixture command failed: {parts[0]}\n{completed.stderr}')
++        return completed.stdout
++
++    serial = 0
++    # Two unrelated roots, one trusted only by the disposable child-client file.
++    for ca in ('root', 'other-root'):
++        openssl('req', '-new', '-x509', '-newkey', 'rsa:2048', '-nodes',
++                '-keyout', root / f'{ca}.key', '-out', root / f'{ca}.pem',
++                '-days', '3', '-subj', f'/CN=FPC disposable {ca}',
++                '-addext', 'basicConstraints=critical,CA:TRUE',
++                '-addext', 'keyUsage=critical,keyCertSign,cRLSign')
++    openssl('genpkey', '-algorithm', 'RSA', '-pkeyopt', 'rsa_keygen_bits:2048',
++            '-out', root / 'server.key')
++    openssl('req', '-new', '-key', root / 'server.key', '-out', root / 'server.csr',
++            '-subj', '/CN=localhost')
++
++    def leaf(name, san, ca='root'):
++        nonlocal serial
++        serial += 1
++        ext = root / f'{name}.ext'
++        ext.write_text('basicConstraints=critical,CA:FALSE\n'
++                       'keyUsage=critical,digitalSignature,keyEncipherment\n'
++                       'extendedKeyUsage=serverAuth\nsubjectAltName=' + san + '\n')
++        openssl('x509', '-req', '-in', root / 'server.csr', '-CA', root / f'{ca}.pem',
++                '-CAkey', root / f'{ca}.key', '-set_serial', str(serial),
++                '-days', '2', '-extfile', ext, '-out', root / f'{name}.pem')
++
++    leaf('valid', 'DNS:localhost,IP:127.0.0.1,IP:::1')
++    leaf('wrong-dns', 'DNS:another.invalid')
++    leaf('dns-number', 'DNS:127.0.0.1')
++    leaf('dns-only', 'DNS:localhost')
++    leaf('untrusted', 'DNS:localhost,IP:127.0.0.1', 'other-root')
++    (root / 'untrusted-chain.pem').write_bytes((root / 'untrusted.pem').read_bytes() +
++                                               (root / 'other-root.pem').read_bytes())
++    openssl('req', '-new', '-x509', '-key', root / 'server.key', '-out', root / 'self-signed.pem',
++            '-days', '2', '-subj', '/CN=localhost', '-addext', 'subjectAltName=DNS:localhost,IP:127.0.0.1')
++    # A normally ordered, already expired validity interval independent of clock year.
++    (root / 'index.txt').write_text('')
++    (root / 'serial').write_text('1000\n')
++    config = root / 'ca.conf'
++    config.write_text(f"""[ca]
++default_ca = test
++[test]
++dir = "{root.as_posix()}"
++database = $dir/index.txt
++serial = $dir/serial
++new_certs_dir = $dir
++certificate = $dir/root.pem
++private_key = $dir/root.key
++default_md = sha256
++policy = policy
++unique_subject = no
++[policy]
++commonName = supplied
++""")
++    now = datetime.now(timezone.utc)
++    fmt = '%Y%m%d%H%M%SZ'
++    openssl('ca', '-batch', '-notext', '-config', config, '-in', root / 'server.csr',
++            '-extfile', root / 'valid.ext', '-startdate', (now - timedelta(days=2)).strftime(fmt),
++            '-enddate', (now - timedelta(days=1)).strftime(fmt), '-out', root / 'expired.pem')
++    environment = os.environ.copy()
++    environment['SSL_CERT_FILE'] = str(root / 'root.pem')
++    environment['TLS_SSL_LIBRARY'] = str(args.ssl_library)
++    environment['TLS_CRYPTO_LIBRARY'] = str(args.crypto_library)
++
++    def case(name, certificate='valid', expected='ok', code=0, host='localhost',
++             protocol='tls12', client='peer', drop=False, client_protocol=None,
++             options=None, sequence=None):
++        family = socket.AF_INET6 if ':' in host else socket.AF_INET
++        listener = socket.socket(family)
++        listener.bind(('::1' if family == socket.AF_INET6 else '127.0.0.1', 0))
++        listener.listen(1)
++        listener.settimeout(10)
++        port = listener.getsockname()[1]
++        observed = {'case': name, 'protocol': protocol, 'server_handshake': False}
++        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
++        context.load_cert_chain(root / f'{certificate}.pem', root / 'server.key')
++        version = ssl.TLSVersion.TLSv1_2 if protocol == 'tls12' else ssl.TLSVersion.TLSv1_3
++        context.minimum_version = context.maximum_version = version
++
++        def serve_one():
++            try:
++                connection, _ = listener.accept()
++                with connection:
++                    connection.settimeout(8)
++                    if drop:
++                        hello = connection.recv(16384)
++                        observed['client_hello_bytes'] = len(hello)
++                        observed['server_action'] = 'TCP FIN before any certificate'
++                        connection.shutdown(socket.SHUT_RDWR)
++                        return
++                    with context.wrap_socket(connection, server_side=True) as secure:
++                        observed['server_handshake'] = True
++                        observed['negotiated'] = secure.version()
++                        request = secure.recv(16384)
++                        observed['request_bytes'] = len(request)
++                        body = b'local tls fixture\n'
++                        response = b'HTTP/1.1 200 OK\r\nContent-Length: ' + str(len(body)).encode() + b'\r\nConnection: close\r\n\r\n' + body
++                        secure.sendall(response)
++                        # Send/receive proper close_notify without treating an
++                        # expected rejected-handshake alert as a server error.
++                        try:
++                            secure.unwrap().close()
++                        except (ssl.SSLError, OSError) as exc:
++                            observed['close'] = str(exc)
++            except Exception as exc:
++                observed['server_error'] = str(exc)
++            finally:
++                if not sequence:
++                    listener.close()
++
++        def serve():
++            # One client process can change validation between two connections.
++            for _ in range(2 if sequence else 1):
++                serve_one()
++
++        worker = threading.Thread(target=serve, daemon=True)
++        worker.start()
++        if client == 'peer':
++            command = [str(args.peer), str(args.ssl_library), str(args.crypto_library), host,
++                       str(port), expected, str(code), client_protocol or protocol]
++        elif client == 'options':
++            mode, verify, callback, after, accepted, calls, error = options
++            command = [str(args.options_client), mode, verify, callback, after,
++                       f'https://localhost:{port}/', str(accepted), str(calls), error or 'none']
++            if sequence:
++                verify2, accepted2, calls2, error2 = sequence
++                command.extend([verify2, str(accepted2), str(calls2), error2 or 'none'])
++        else:
++            url_host = f'[{host}]' if family == socket.AF_INET6 else host
++            command = [str(args.httpclient), str(args.ssl_library), str(args.crypto_library),
++                       f'https://{url_host}:{port}/']
++            if expected == 'verify':
++                command.append('reject')
++        completed = subprocess.run(command, env=environment, text=True, capture_output=True, timeout=20)
++        worker.join(10)
++        listener.close()
++        observed.update(returncode=completed.returncode, stdout=completed.stdout, stderr=completed.stderr)
++        results.append(observed)
++        log.write_text(json.dumps(results, indent=2), encoding='utf-8')
++        if worker.is_alive() or completed.returncode:
++            raise AssertionError(f'{name}: {observed}')
++        if expected == 'ok' and not observed['server_handshake']:
++            raise AssertionError(f'{name}: server did not establish TLS')
++        if drop and not observed.get('client_hello_bytes', 0):
++            raise AssertionError(f'{name}: missing ClientHello evidence')
++        print('PASS', name, completed.stdout.strip().replace('\n', ' | '), flush=True)
++
++    for protocol in ('tls12', 'tls13'):
++        case(protocol + '-trusted-dns', protocol=protocol)
++        case(protocol + '-trusted-ipv4', host='127.0.0.1', protocol=protocol)
++        case(protocol + '-wrong-dns', 'wrong-dns', 'verify', 62, protocol=protocol)
++        case(protocol + '-expired', 'expired', 'verify', 10, protocol=protocol)
++        case(protocol + '-self-signed', 'self-signed', 'verify', 18, protocol=protocol)
++        case(protocol + '-untrusted-root', 'untrusted', 'verify', 20, protocol=protocol)
++        case(protocol + '-untrusted-complete-chain', 'untrusted-chain', 'verify', 19, protocol=protocol)
++        case(protocol + '-numeric-dns-is-not-ip-san', 'dns-number', 'verify', 64,
++             host='127.0.0.1', protocol=protocol)
++        case(protocol + '-transport-eof', expected='eof', protocol=protocol, drop=True)
++    case('tls12-server-auto-client', client_protocol='auto')
++    case('tls12-untrusted-chain-auto-client', 'untrusted-chain', 'verify', 19, client_protocol='auto')
++    # Loopback IPv6 is deterministic and requires no public IPv6 connectivity.
++    case('trusted-ipv6', host='::1')
++    case('wrong-ipv6', 'dns-only', 'verify', 64, host='::1')
++    case('httpclient-trusted', client='http')
++    for name in ('wrong-dns', 'expired', 'self-signed', 'untrusted', 'untrusted-chain'):
++        case('httpclient-' + name, name, 'verify', client='http')
++    if args.options_client:
++        # Native True rejects these disposable roots; no Windows trust store is
++        # changed. DNS/expiry isolation is supplied by the OpenSSL cases above.
++        for mode in ('legacy', 'smart', 'native'):
++            for certificate in ('wrong-dns', 'expired', 'self-signed', 'untrusted', 'untrusted-chain'):
++                error = '80090325' if mode == 'native' else 'certificate verify failed'
++                case(f'{mode}-verify-true-{certificate}', certificate, 'verify', client='options',
++                     options=(mode, 'true', 'true', 'none', False, 0, error))
++                case(f'{mode}-verify-false-{certificate}', certificate, client='options',
++                     options=(mode, 'false', 'true', 'none', True, 1, ''))
++            case(f'{mode}-default-false', 'self-signed', client='options',
++                 options=(mode, 'default', 'true', 'none', True, 1, ''))
++            case(f'{mode}-after-create-false', 'self-signed', client='options',
++                 options=(mode, 'true', 'true', 'false', True, 1, ''))
++            case(f'{mode}-callback-veto', expected='verify', client='options',
++                 options=(mode, 'false', 'false', 'none', False, 1, ''))
++            error = '80090325' if mode == 'native' else 'certificate verify failed'
++            case(f'{mode}-false-then-true', 'self-signed', client='options',
++                 options=(mode, 'false', 'true', 'none', True, 1, ''),
++                 sequence=('true', False, 0, error))
++            case(f'{mode}-true-then-false', 'self-signed', client='options',
++                 options=(mode, 'true', 'true', 'none', False, 0, error),
++                 sequence=('false', True, 1, ''))
++            if mode != 'native':
++                for certificate in ('wrong-dns', 'expired', 'self-signed', 'untrusted', 'untrusted-chain'):
++                    case(f'{mode}-tls13-false-{certificate}', certificate, protocol='tls13', client='options',
++                         options=(mode, 'false', 'true', 'none', True, 1, ''))
++                case(f'{mode}-strict-trusted-callback', client='options',
++                     options=(mode, 'true', 'true', 'none', True, 1, ''))
++                case(f'{mode}-strict-trusted-veto', expected='verify', client='options',
++                     options=(mode, 'true', 'false', 'none', False, 1, ''))
++    print(f'PASS local real TLS {len(results)}; Python server {ssl.OPENSSL_VERSION}; log={log}')
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/packages/fcl-tls/tests/testopensslpeer.pp b/packages/fcl-tls/tests/testopensslpeer.pp
+new file mode 100644
+index 0000000000..e38bb35f3d
+--- /dev/null
++++ b/packages/fcl-tls/tests/testopensslpeer.pp
+@@ -0,0 +1,71 @@
++program testopensslpeer;
++{$mode objfpc}{$H+}
++// Diagnostic client: distinguish X.509 rejection from an incomplete handshake.
++uses SysUtils, ssockets, sslsockets, sslbase, opensslsockets, smartsslsockets;
++var Handler: TOpenSSLSocketHandler; Stream: TInetSocket;
++    Accepted: Boolean; ErrorText, Response, Request: AnsiString;
++    VerifyResult, N: Integer; B: array[0..4095] of Char; Started: QWord;
++procedure Check(Value: Boolean; const Msg: String);
++begin if not Value then raise Exception.Create(Msg) end;
++begin
++  SetSmartTLSLibraryPaths(ParamStr(1),ParamStr(2),'');
++  SetSmartTLSBackend(tbOpenSSL);
++  Handler:=TOpenSSLSocketHandler(TSSLSocketHandler.GetDefaultHandler);
++  Handler.VerifyPeerCert:=True;
++  if ParamStr(7)='tls12' then Handler.SSLType:=stTLSv1_2;
++  Stream:=TInetSocket.Create(ParamStr(3),StrToInt(ParamStr(4)),Handler);
++  try
++    Stream.ConnectTimeout:=5000;
++    Stream.IOTimeout:=5000;
++    if ParamStr(5)='probe' then Stream.IOTimeout:=15000;
++    Started:=GetTickCount64;
++    Accepted:=False;
++    ErrorText:='';
++    try Stream.Connect; Accepted:=True
++    except on E: Exception do ErrorText:=E.Message end;
++    VerifyResult:=-1;
++    if Handler.SSL<>nil then VerifyResult:=Handler.SSL.VerifyResult;
++    Writeln('HANDSHAKE accepted=',Accepted,' verify=',VerifyResult,
++      ' active=',Handler.SSLActive,' elapsed=',GetTickCount64-Started);
++    if ErrorText<>'' then Writeln('ERROR ',ErrorText);
++    Check(GetSmartTLSBackend=tbOpenSSL,'Handshake failure changed the backend');
++    if ParamStr(5)='probe' then
++      begin
++      // Public diagnostic only: print the verdict, do not turn failures into passes.
++      Writeln('PROBE ',ParamStr(3));
++      end
++    else if ParamStr(5)='verify' then
++      begin
++      Check(not Accepted and not Handler.SSLActive,'Invalid certificate accepted');
++      Check(VerifyResult=StrToInt(ParamStr(6)),'Unexpected X.509 verification result');
++      Check(Pos('certificate verify failed',LowerCase(ErrorText))>0,
++        'Expected a certificate rejection, not another failure');
++      end
++    else if ParamStr(5)='eof' then
++      begin
++      Check(not Accepted and not Handler.SSLActive,'Dropped handshake accepted');
++      // Zero is the default before any certificate arrives, not authentication.
++      Check(VerifyResult=0,'EOF unexpectedly produced a certificate verdict');
++      Check(Pos('unexpected eof while reading',LowerCase(ErrorText))>0,
++        'Expected OpenSSL transport EOF');
++      Check(Pos('certificate verify failed',LowerCase(ErrorText))=0,
++        'EOF was misclassified as certificate rejection');
++      end
++    else
++      begin
++      Check(Accepted and Handler.SSLActive and (VerifyResult=0),'Trusted TLS handshake failed');
++      Request:='GET / HTTP/1.1'#13#10+'Host: '+ParamStr(3)+#13#10+'Connection: close'#13#10#13#10;
++      Check(Stream.Write(Request[1],Length(Request))=Length(Request),'Request write failed');
++      Response:='';
++      repeat
++        N:=Stream.Read(B,SizeOf(B));
++        Check(N>0,'Authenticated response missing: '+Handler.LastSSLErrorString);
++        Response:=Response+Copy(AnsiString(B),1,N);
++        Check(Length(Response)<16384,'Fixture response too large');
++      until Pos('local tls fixture',Response)>0;
++      Check(Pos('HTTP/1.1 200',Response)=1,'Unexpected fixture HTTP status');
++      end;
++    if ParamStr(5)<>'probe' then
++      Writeln('PASS peer ',ParamStr(5),' host=',ParamStr(3),' verify=',VerifyResult);
++  finally Stream.Free end;
++end.
+diff --git a/packages/fcl-tls/tests/testpolicy.pp b/packages/fcl-tls/tests/testpolicy.pp
+new file mode 100644
+index 0000000000..8ecab78a69
+--- /dev/null
++++ b/packages/fcl-tls/tests/testpolicy.pp
+@@ -0,0 +1,40 @@
++program testpolicy;
++{$mode objfpc}{$H+}
++uses SysUtils, tlsbackendpolicy;
++var Checks: Integer;
++procedure Check(B: Boolean; const Msg: String);
++begin
++  Inc(Checks);
++  if not B then raise Exception.Create(Msg);
++end;
++procedure ExpectError(Backend: TTLSBackend; SSL, Gnu: TTLSLibraryState);
++begin
++  try
++    ChooseTLSBackend(Backend, SSL, Gnu, tbSchannel);
++  except
++    on E: ETLSBackendSelection do begin Inc(Checks); Exit end;
++  end;
++  raise Exception.Create('Expected selection error');
++end;
++begin
++  Check(ChooseTLSBackend(tbAuto, lsReady, lsReady, tbSchannel)=tbOpenSSL,'OpenSSL first');
++  Check(ChooseTLSBackend(tbAuto, lsAbsent, lsReady, tbSchannel)=tbGnuTLS,'GnuTLS second');
++  Check(ChooseTLSBackend(tbAuto, lsAbsent, lsAbsent, tbSchannel)=tbSchannel,'Native last');
++  Check(ChooseTLSBackend(tbAuto, lsReady, lsInvalid, tbSchannel)=tbOpenSSL,'Unused GnuTLS irrelevant');
++  Check(ChooseTLSBackend(tbSchannel, lsInvalid, lsInvalid, tbSchannel)=tbSchannel,'Explicit native');
++  Check(ChooseTLSBackend(tbGnuTLS, lsInvalid, lsReady, tbSchannel)=tbGnuTLS,'Explicit GnuTLS');
++  Check(ChooseTLSBackend(tbOpenSSL, lsReady, lsInvalid, tbAuto)=tbOpenSSL,'Explicit OpenSSL');
++  ExpectError(tbAuto, lsInvalid, lsReady);
++  ExpectError(tbAuto, lsAbsent, lsInvalid);
++  ExpectError(tbOpenSSL, lsAbsent, lsReady);
++  ExpectError(tbGnuTLS, lsReady, lsInvalid);
++  try
++    ChooseTLSBackend(tbAuto, lsAbsent, lsAbsent, tbAuto);
++    raise Exception.Create('Expected no backend');
++  except on E: ETLSBackendSelection do Inc(Checks) end;
++  try
++    ChooseTLSBackend(tbNetworkFramework, lsAbsent, lsAbsent, tbSchannel);
++    raise Exception.Create('Expected unsupported backend');
++  except on E: ETLSBackendSelection do Inc(Checks) end;
++  Writeln('PASS policy ', Checks);
++end.
+diff --git a/packages/fcl-tls/tests/testpublicprobe.py b/packages/fcl-tls/tests/testpublicprobe.py
+new file mode 100644
+index 0000000000..06d6098d49
+--- /dev/null
++++ b/packages/fcl-tls/tests/testpublicprobe.py
+@@ -0,0 +1,70 @@
++"""Bounded public TLS diagnostics; exit 0 means collection, not validation.
++
++Never retries a connection inside a backend. Every configuration is an explicit
++new process. Default, short-group and TLS1.2 probes retain certificate/identity
++verification. An EOF or probe's exit 0 is not a successful rejection test.
++"""
++import argparse
++import json
++import os
++from pathlib import Path
++import socket
++import subprocess
++import time
++
++
++def main():
++    p = argparse.ArgumentParser()
++    p.add_argument('peer', type=Path)
++    p.add_argument('openssl', type=Path)
++    p.add_argument('ssl_library', type=Path)
++    p.add_argument('crypto_library', type=Path)
++    p.add_argument('ca_file', type=Path)
++    p.add_argument('output', type=Path)
++    p.add_argument('--host', default='untrusted-root.badssl.com')
++    p.add_argument('--trials', type=int, choices=(1, 2), default=1)
++    args = p.parse_args()
++    for name in ('peer', 'openssl', 'ssl_library', 'crypto_library', 'ca_file'):
++        value = getattr(args, name).resolve()
++        if not value.is_file():
++            raise SystemExit(f'Existing tool/fixture missing: {value}')
++        setattr(args, name, value)
++    args.output.mkdir(parents=True, exist_ok=True)
++    env = os.environ.copy()
++    env['SSL_CERT_FILE'] = str(args.ca_file)
++    report = {'host': args.host, 'addresses': sorted({a[4][0] for a in socket.getaddrinfo(args.host, 443)}),
++              'note': 'Collection only: no failed handshake counts as a passed certificate test', 'probes': []}
++    configurations = [('openssl-default', []), ('openssl-short-keyshare', ['-groups', 'X25519']),
++                      ('openssl-tls12', ['-tls1_2']), ('fpc-default', []), ('fpc-tls12', ['tls12'])]
++    for trial in range(args.trials):
++        for name, options in configurations:
++            if name.startswith('fpc'):
++                command = [str(args.peer), str(args.ssl_library), str(args.crypto_library),
++                           args.host, '443', 'probe', '0', *options]
++            else:
++                command = [str(args.openssl), 's_client', '-connect', args.host + ':443',
++                           '-servername', args.host, '-verify_return_error', '-verify_hostname',
++                           args.host, '-CAfile', str(args.ca_file), '-state', '-msg', *options]
++            started = time.monotonic()
++            try:
++                result = subprocess.run(command, input='', text=True, capture_output=True,
++                                        env=env, timeout=22)
++                item = {'trial': trial + 1, 'configuration': name, 'returncode': result.returncode,
++                        'stdout': result.stdout, 'stderr': result.stderr}
++            except subprocess.TimeoutExpired as exc:
++                item = {'trial': trial + 1, 'configuration': name, 'timeout': True,
++                        'stdout': str(exc.stdout), 'stderr': str(exc.stderr)}
++            item['elapsed'] = time.monotonic() - started
++            report['probes'].append(item)
++            (args.output / 'results.json').write_text(json.dumps(report, indent=2), encoding='utf-8')
++            print('PROBE', name, trial + 1, 'elapsed=', round(item['elapsed'], 3), flush=True)
++            for line in (item['stdout'] + '\n' + item['stderr']).splitlines():
++                if any(word in line.lower() for word in ('handshake accepted', 'verify=', 'verify error',
++                       'verify return', 'certificate verify failed', 'unexpected eof',
++                       'handshake has read', 'no peer certificate', 'ssl_connect:error')):
++                    print(line, flush=True)
++    print('COLLECTED', args.output / 'results.json')
++
++
++if __name__ == '__main__':
++    main()
+diff --git a/packages/fcl-tls/tests/testschannel.pp b/packages/fcl-tls/tests/testschannel.pp
+new file mode 100644
+index 0000000000..9311b2d0ce
+--- /dev/null
++++ b/packages/fcl-tls/tests/testschannel.pp
+@@ -0,0 +1,52 @@
++program testschannel;
++{$mode objfpc}{$H+}
++uses SysUtils, Classes, fphttpclient, ssockets, sslsockets, schannelsslsockets, smartsslsockets;
++var H: TSchannelSocketHandler; C: TFPHTTPClient; Body: TMemoryStream;
++    Started: QWord; Rejected: Boolean;
++begin
++  H:=TSchannelSocketHandler.Create;
++  try
++    if H.VerifyPeerCert then raise Exception.Create('Handler default changed');
++    if H.Accept then raise Exception.Create('Client backend accepted plaintext');
++    if H.LastSSLErrorCode=0 then raise Exception.Create('Accept needs error');
++    if H.SSLActive then raise Exception.Create('Accept activated TLS');
++    H.RemoteHostName:='example.com';
++  finally H.Free end;
++  if ParamCount=0 then begin Writeln('PASS Schannel construction and Accept'); Halt(0) end;
++  // Exercise fphttpclient through the smart factory, explicitly native even
++  // when test fixtures exist elsewhere on the machine.
++  SetSmartTLSBackend(tbSchannel);
++  C:=TFPHTTPClient.Create(nil);
++  Body:=TMemoryStream.Create;
++  try
++    C.VerifySSLCertificate:=True;
++    C.IOTimeout:=2000;
++    C.ConnectTimeout:=15000;
++    C.AllowRedirect:=False;
++    Started:=GetTickCount64;
++    Rejected:=False;
++    try
++      C.Get(ParamStr(1),Body);
++    except
++      on E: Exception do
++        begin
++        Rejected:=True;
++        Writeln('REJECT ', E.ClassName, ': ', E.Message);
++        if ParamStr(2)<>'reject' then raise;
++        if (Pos('Schannel handshake / system certificate validation',E.Message)=0) or
++           ((Pos('80090322',E.Message)=0) and (Pos('80090325',E.Message)=0) and
++            (Pos('80090328',E.Message)=0) and (Pos('800B010F',E.Message)=0) and
++            (Pos('800B0109',E.Message)=0) and (Pos('800B0101',E.Message)=0)) then
++          raise Exception.Create('Expected a certificate validation failure, not network failure');
++        if (ParamStr(3)<>'') and (Pos(ParamStr(3),E.Message)=0) then
++          raise Exception.Create('Certificate failure had wrong error code');
++        end;
++    end;
++    if (ParamStr(2)='reject') and not Rejected then raise Exception.Create('Invalid certificate accepted');
++    if (ParamStr(2)<>'reject') and ((C.ResponseStatusCode<>200) or (Body.Size=0)) then
++      raise Exception.Create('Expected nonempty HTTP 200');
++    if GetSmartTLSBackend<>tbSchannel then raise Exception.Create('Certificate test changed backend');
++    if not Rejected then Writeln('PASS HTTPS status=',C.ResponseStatusCode,' bytes=',Body.Size);
++    Writeln('Elapsed ms=',GetTickCount64-Started);
++  finally Body.Free; C.Free end;
++end.
+diff --git a/packages/fcl-tls/tests/testsmart.pp b/packages/fcl-tls/tests/testsmart.pp
+new file mode 100644
+index 0000000000..4f965dad1a
+--- /dev/null
++++ b/packages/fcl-tls/tests/testsmart.pp
+@@ -0,0 +1,68 @@
++program testsmart;
++{$mode objfpc}{$H+}
++uses Classes, SysUtils, sslsockets, openssl, gnutls, smartsslsockets, opensslsockets;
++type
++  TWorker = class(TThread)
++    ErrorText: String;
++    procedure Execute; override;
++  end;
++var I: Integer; ExpectedClass: String; Workers: array[0..15] of TWorker; H: TSSLSocketHandler;
++procedure TWorker.Execute;
++var Handler: TSSLSocketHandler; J: Integer;
++begin
++  try
++    for J:=1 to 100 do
++      begin
++      Handler:=TSSLSocketHandler.GetDefaultHandler;
++      try
++      if Handler.ClassName<>ExpectedClass then
++        raise Exception.Create('Unexpected TLS handler class '+Handler.ClassName);
++      finally Handler.Free end;
++      end;
++  except on E: Exception do ErrorText:=E.Message end;
++end;
++begin
++  try
++    if ParamStr(1)='native' then SetSmartTLSBackend(tbSchannel);
++    if ParamStr(1)='gnutls' then SetSmartTLSBackend(tbGnuTLS);
++    if ParamStr(1)='openssl' then SetSmartTLSBackend(tbOpenSSL);
++    if ParamStr(1)='relative' then SetSmartTLSLibraryPaths('relative.dll','crypto.dll','');
++    if ParamStr(1)='explicitclass' then
++      begin
++      TSSLSocketHandler.SetDefaultHandlerClass(TOpenSSLSocketHandler);
++      if TSSLSocketHandler.GetDefaultHandlerClass<>TOpenSSLSocketHandler then
++        raise Exception.Create('Explicit registration did not clear smart factory');
++      if GetSmartTLSBackend<>tbAuto then raise Exception.Create('Explicit registration initialized smart');
++      Writeln('PASS explicit handler registration');
++      Halt(0);
++      end;
++    if ParamStr(1)='preloaded' then
++      begin
++      if not InitSSLInterface(ParamStr(2),ParamStr(3)) then
++        raise Exception.Create('Fixture initialization failed');
++      end;
++    ExpectedClass:='TSchannelSocketHandler';
++    if ParamStr(1)='raceopenssl' then ExpectedClass:='TSmartOpenSSLHandler';
++    if (ParamStr(1)='race') or (ParamStr(1)='raceopenssl') then
++      begin
++      for I:=0 to High(Workers) do Workers[I]:=TWorker.Create(True);
++      for I:=0 to High(Workers) do Workers[I].Start;
++      for I:=0 to High(Workers) do
++        begin
++        Workers[I].WaitFor;
++        if Workers[I].ErrorText<>'' then raise Exception.Create(Workers[I].ErrorText);
++        Workers[I].Free;
++        end;
++      end
++    else
++      begin H:=TSSLSocketHandler.GetDefaultHandler; H.Free end;
++    Writeln('SELECTED ', TLSBackendName(GetSmartTLSBackend));
++    if (ParamStr(1)='race') and (IsSSLloaded or GnuTLSloaded) then
++      raise Exception.Create('Native selection loaded a third party TLS library');
++    try
++      SetSmartTLSBackend(tbAuto);
++      raise Exception.Create('Selection must be immutable');
++    except on E: ESmartTLS do ; end;
++    Writeln('PASS immutable selection');
++  except on E: Exception do begin Writeln('ERROR ', E.Message); Halt(1) end end;
++end.
+diff --git a/packages/fcl-tls/tests/testsmartclient.pp b/packages/fcl-tls/tests/testsmartclient.pp
+new file mode 100644
+index 0000000000..03a6a7829f
+--- /dev/null
++++ b/packages/fcl-tls/tests/testsmartclient.pp
+@@ -0,0 +1,36 @@
++program testsmartclient;
++{$mode objfpc}{$H+}
++uses SysUtils, Classes, fphttpclient, smartsslsockets;
++var Client: TFPHTTPClient; Body: TMemoryStream; Rejected: Boolean;
++begin
++  SetSmartTLSLibraryPaths(ParamStr(1),ParamStr(2),'');
++  SetSmartTLSBackend(tbOpenSSL);
++  Client:=TFPHTTPClient.Create(nil);
++  Body:=TMemoryStream.Create;
++  try
++    Client.VerifySSLCertificate:=True; // strict certificate tests opt in
++    Client.ConnectTimeout:=15000;
++    Client.IOTimeout:=15000;
++    Client.AllowRedirect:=False;
++    Rejected:=False;
++    // A redirect from an IP endpoint still proves the TLS identity check.
++    try Client.HTTPMethod('GET',ParamStr(3),Body,[200,301])
++    except
++      on E: Exception do
++        begin
++        Writeln('REJECT ',E.Message);
++        if ParamStr(4)<>'reject' then raise;
++        if Pos('certificate verify failed',LowerCase(E.Message))=0 then
++          raise Exception.Create('Expected certificate rejection, not network failure');
++        Rejected:=True;
++        end;
++    end;
++    if (ParamStr(4)='reject')<>Rejected then raise Exception.Create('Unexpected certificate result');
++    if not Rejected and (((Client.ResponseStatusCode<>200) and
++       (Client.ResponseStatusCode<>301)) or
++       ((Client.ResponseStatusCode=200) and (Body.Size=0))) then
++      raise Exception.Create('Expected HTTP 200 with a body, or HTTP 301');
++    if GetSmartTLSBackend<>tbOpenSSL then raise Exception.Create('TLS backend changed');
++    Writeln('PASS smart OpenSSL client ',ParamStr(3),' rejected=',Rejected,' status=',Client.ResponseStatusCode,' bytes=',Body.Size);
++  finally Body.Free; Client.Free end;
++end.
+diff --git a/packages/fcl-tls/tests/teststates.pp b/packages/fcl-tls/tests/teststates.pp
+new file mode 100644
+index 0000000000..29a59c8203
+--- /dev/null
++++ b/packages/fcl-tls/tests/teststates.pp
+@@ -0,0 +1,72 @@
++program teststates;
++{$mode objfpc}{$H+}
++// Compiled against a test-only SSPI provider in an isolated output directory.
++uses SysUtils, Windows, WinSock2, ssockets, schannelsslsockets, schannelsspi;
++var H: TSchannelSocketHandler; S: TInetSocket; B: array[0..15] of Char; N, Opt, Error: Integer; Data: AnsiString; Started, Elapsed: QWord;
++procedure Check(Value: Boolean; const Msg: String);
++begin if not Value then raise Exception.Create(Msg) end;
++begin
++  TestScenario:=ParamStr(2);
++  H:=TSchannelSocketHandler.Create;
++  S:=TInetSocket.Create('127.0.0.1',StrToInt(ParamStr(1)),H);
++  try
++    S.ConnectTimeout:=500;
++    S.IOTimeout:=500;
++    S.Connect;
++    if (TestScenario='sendpressure') or (TestScenario='shutdownpressure') then
++      begin
++      Opt:=4096;
++      Check(SetSockOpt(S.Handle,SOL_SOCKET,SO_SNDBUF,@Opt,SizeOf(Opt))=0,'Small send buffer');
++      Data:=StringOfChar('x',32*1024*1024);
++      if TestScenario='sendpressure' then
++        begin
++        S.IOTimeout:=150;
++        Started:=GetTickCount64;
++        N:=S.Write(Data[1],Length(Data));
++        Elapsed:=GetTickCount64-Started;
++        Check((N=-1) and (H.LastError=WSAETIMEDOUT),'Backpressure must time out');
++        Check((Elapsed>=100) and (Elapsed<1500),'Send exceeded deadline');
++        end
++      else
++        begin
++        // Fill the nonblocking TCP send queue without making TLS terminal.
++        repeat
++          N:=WinSock2.Send(S.Handle,Data[1],Length(Data),0);
++          if N=SOCKET_ERROR then
++            begin Error:=WSAGetLastError; Check(Error=WSAEWOULDBLOCK,'Fill send queue') end;
++        until N=SOCKET_ERROR;
++        TestToken:=StringOfChar('z',1024*1024);
++        S.IOTimeout:=0;
++        Started:=GetTickCount64;
++        Check(not H.Shutdown(False),'Backpressure close must time out');
++        Elapsed:=GetTickCount64-Started;
++        Check(H.LastError=WSAETIMEDOUT,'Close timeout error');
++        Check((Elapsed>=1800) and (Elapsed<3500),'Default close exceeded two-second deadline');
++        end;
++      Writeln('PASS simulated SSPI state ',TestScenario,' elapsed=',Elapsed);
++      Halt(0);
++      end;
++    if TestScenario='renegotiate' then
++      begin
++      N:=S.Read(B,3);
++      Check((N=3) and (Copy(String(B),1,3)='ABC'),'Plaintext before renegotiation lost');
++      Check(TestISCCount=2,'Renegotiation must re-enter ISC with no EXTRA');
++      N:=S.Read(B,1);
++      Check((N=1) and (B[0]='G'),'Final plaintext before close_notify lost');
++      Check(S.Read(B,1)=0,'Expected TLS EOF');
++      end
++    else
++      begin
++      N:=S.Read(B,2);
++      Check((N=2) and (B[0]='A') and (B[1]='B'),'Incomplete record or data lost');
++      Check(H.BytesAvailable=4,'Plaintext remainder not buffered');
++      Check(S.CanRead(0),'Buffered plaintext was not readable');
++      N:=S.Read(B,4);
++      Check((N=4) and (B[0]='C') and (B[3]='F'),'Plaintext remainder corrupted');
++      N:=S.Read(B,1);
++      Check((N=1) and (B[0]='G'),'Plaintext returned with close_notify lost');
++      Check(S.Read(B,1)=0,'Expected TLS EOF');
++      end;
++    Writeln('PASS simulated SSPI state ',TestScenario);
++  finally S.Free end;
++end.
+diff --git a/packages/fcl-tls/tests/teststates.py b/packages/fcl-tls/tests/teststates.py
+new file mode 100644
+index 0000000000..2c068e64cd
+--- /dev/null
++++ b/packages/fcl-tls/tests/teststates.py
+@@ -0,0 +1,146 @@
++"""Test handler control flow with an isolated, scripted SSPI boundary provider.
++
++This is a state-machine test, not a cryptographic or Windows trust test. The
++real schannelsslsockets implementation reads fragmented bytes over loopback;
++only OS SSPI calls are replaced. Production units contain no test hooks.
++"""
++import argparse
++from pathlib import Path
++import re
++import socket
++import subprocess
++import threading
++import time
++
++PROVIDER = r"""
++function AcquireCredentialsHandleW(Principal, PackageName: PWideChar;
++  Use: Cardinal; LogonID, AuthData, GetKey, GetKeyArg: Pointer;
++  Credential: PSecHandle; Expiry: Pointer): TSecurityStatus; stdcall;
++begin
++  Credential^.Lower:=1;
++  Result:=SEC_E_OK;
++end;
++function InitializeSecurityContextW(Credential, Context: PSecHandle;
++  Target: PWideChar; Requirements, Reserved1, DataRep: Cardinal;
++  Input: PSecBufferDesc; Reserved2: Cardinal; NewContext: PSecHandle;
++  Output: PSecBufferDesc; Attributes: PCardinal; Expiry: Pointer): TSecurityStatus; stdcall;
++begin
++  Inc(TestISCCount);
++  NewContext^.Lower:=2;
++  Attributes^:=ISC_REQ_CONFIDENTIALITY;
++  if TestShutdown then
++    begin
++    Output^.Buffers[0].BufferType:=SECBUFFER_TOKEN;
++    Output^.Buffers[0].Size:=Length(TestToken);
++    Output^.Buffers[0].Data:=PChar(TestToken);
++    end;
++  Result:=SEC_E_OK;
++end;
++function QueryContextAttributesW(Context: PSecHandle; Attribute: Cardinal;
++  Buffer: Pointer): TSecurityStatus; stdcall;
++var Sizes: ^TSecStreamSizes;
++begin
++  Sizes:=Buffer;
++  FillChar(Sizes^,SizeOf(Sizes^),0);
++  Sizes^.MaximumMessage:=16384;
++  Result:=SEC_E_OK;
++end;
++function EncryptMessage(Context: PSecHandle; QOP: Cardinal;
++  Message: PSecBufferDesc; Sequence: Cardinal): TSecurityStatus; stdcall;
++begin Result:=SEC_E_OK end;
++function DecryptMessage(Context: PSecHandle; Message: PSecBufferDesc;
++  Sequence: Cardinal; QOP: PCardinal): TSecurityStatus; stdcall;
++var InputSize: Cardinal;
++begin
++  InputSize:=Message^.Buffers[0].Size;
++  if (TestScenario<>'renegotiate') and (TestDecryptCount=0) and (InputSize<2) then
++    Exit(SEC_E_INCOMPLETE_MESSAGE);
++  FillChar(Message^.Buffers^,4*SizeOf(TSecBuffer),0);
++  Message^.Buffers[1].BufferType:=SECBUFFER_DATA;
++  if TestDecryptCount=0 then
++    begin
++    Message^.Buffers[1].Data:=PChar(TestPlain);
++    if TestScenario='renegotiate' then
++      begin Message^.Buffers[1].Size:=3; Result:=SEC_I_RENEGOTIATE end
++    else
++      begin Message^.Buffers[1].Size:=6; Result:=SEC_E_OK end;
++    // No SECBUFFER_EXTRA is returned for the renegotiation test.
++    end
++  else
++    begin
++    Message^.Buffers[1].Data:=PChar(TestFinal);
++    Message^.Buffers[1].Size:=1;
++    Result:=SEC_I_CONTEXT_EXPIRED;
++    end;
++  Inc(TestDecryptCount);
++end;
++function ApplyControlToken(Context: PSecHandle; Input: PSecBufferDesc): TSecurityStatus; stdcall;
++begin TestShutdown:=True; Result:=SEC_E_OK end;
++function FreeContextBuffer(Buffer: Pointer): TSecurityStatus; stdcall;
++begin Result:=SEC_E_OK end;
++function DeleteSecurityContext(Context: PSecHandle): TSecurityStatus; stdcall;
++begin Result:=SEC_E_OK end;
++function FreeCredentialsHandle(Credential: PSecHandle): TSecurityStatus; stdcall;
++begin Result:=SEC_E_OK end;
++end.
++"""
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("compiler", type=Path)
++    parser.add_argument("output", type=Path)
++    parser.add_argument("--scenario", choices=("incomplete", "renegotiate", "sendpressure", "shutdownpressure"))
++    args = parser.parse_args()
++    root = Path(__file__).resolve().parents[3]
++    args.output.mkdir(parents=True, exist_ok=True)
++    binding = (root / "packages/fcl-net/src/schannelsspi.pp").read_text()
++    interface = binding.split("implementation")[0]
++    interface = re.sub(r"\s*external 'secur32.dll' name '[^']+';", "", interface)
++    interface += "\nvar TestScenario: String; TestISCCount, TestDecryptCount: Integer;\n"
++    interface += "TestShutdown: Boolean; TestToken: String;\n"
++    interface += "TestPlain: String = 'ABCDEF'; TestFinal: String = 'G';\nimplementation\n"
++    (args.output / "schannelsspi.pp").write_text(interface + PROVIDER)
++    command = [str(args.compiler), "-n", "-B", "-gl", f"-Fu{args.output}",
++               f"-Fu{root / 'rtl/units/x86_64-win64'}", f"-Fu{root / 'packages/fcl-net/src'}",
++               f"-Fu{root / 'packages/rtl-objpas/src/inc'}", f"-Fu{root / 'packages/rtl-extra/src/win'}",
++               f"-Fu{root / 'packages/fcl-base/src'}", f"-Fi{root / 'packages/fcl-net/src/win'}",
++               f"-Fi{root / 'packages/rtl-extra/src/inc'}", f"-FU{args.output}", f"-FE{args.output}",
++               str(root / "packages/fcl-tls/tests/teststates.pp")]
++    subprocess.run(command, check=True)
++    for scenario in ((args.scenario,) if args.scenario else ("incomplete", "renegotiate", "sendpressure", "shutdownpressure")):
++        listener = socket.socket()
++        listener.bind(("127.0.0.1", 0))
++        listener.listen(1)
++        listener.settimeout(10)
++
++        finished = threading.Event()
++
++        def feed():
++            client, _ = listener.accept()
++            with client:
++                if scenario in ("sendpressure", "shutdownpressure"):
++                    client.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 1024)
++                    finished.wait(8)
++                    listener.close()
++                    return
++                client.sendall(b"x")
++                time.sleep(0.1)
++                if scenario != "renegotiate":
++                    client.sendall(b"y")
++                    time.sleep(0.1)
++                client.sendall(b"z")
++                time.sleep(0.1)
++            listener.close()
++
++        worker = threading.Thread(target=feed)
++        worker.start()
++        result = subprocess.run([str(args.output / "teststates.exe"), str(listener.getsockname()[1]), scenario], timeout=10)
++        finished.set()
++        worker.join(2)
++        if result.returncode:
++            raise SystemExit(result.returncode)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/packages/fcl-tls/tests/testtransport.pp b/packages/fcl-tls/tests/testtransport.pp
+new file mode 100644
+index 0000000000..c3149464ff
+--- /dev/null
++++ b/packages/fcl-tls/tests/testtransport.pp
+@@ -0,0 +1,83 @@
++program testtransport;
++{$mode objfpc}{$H+}
++uses SysUtils, Classes, ssockets, sslsockets, sslbase, schannelsslsockets;
++var H: TSchannelSocketHandler; S: TInetSocket; Request, Header, Upload: AnsiString;
++    Buffer: array[0..4095] of Byte; N, Remaining, Expected: Integer;
++    Started: QWord;
++begin
++  H:=TSchannelSocketHandler.Create;
++  H.VerifyPeerCert:=True;
++  H.ServerName:=ParamStr(2);
++  S:=TInetSocket.Create('127.0.0.1',StrToInt(ParamStr(1)),H);
++  try
++    S.ConnectTimeout:=2000;
++    S.IOTimeout:=2000;
++    Started:=GetTickCount64;
++    if ParamStr(3)='stall' then
++      begin
++      S.ConnectTimeout:=150;
++      try
++        S.Connect;
++        raise Exception.Create('Stalled handshake accepted');
++      except
++        on E: ESocketError do
++          if (H.LastError<>10060) or (GetTickCount64-Started>1500) then raise;
++      end;
++      Writeln('PASS stalled handshake deadline');
++      Halt(0);
++      end;
++    if ParamStr(4)='tls12' then H.SSLType:=stTLSv1_2;
++    S.Connect;
++    if ParamStr(3)='timeout' then
++      begin
++      S.IOTimeout:=150;
++      N:=S.Read(Buffer,SizeOf(Buffer));
++      if (N<>-1) or (H.LastError<>10060) or (GetTickCount64-Started>3000) then
++        raise Exception.Create('Read timeout failed');
++      Writeln('PASS receive timeout');
++      Halt(0);
++      end;
++    if ParamStr(3)='upload' then
++      begin
++      Expected:=0;
++      Upload:=StringOfChar('x',1048576);
++      Request:='POST /__up HTTP/1.1'#13#10+'Host: '+ParamStr(2)+#13#10+
++        'Content-Length: '+IntToStr(Length(Upload))+#13#10+
++        'Connection: close'#13#10#13#10;
++      end
++    else
++      begin
++      Expected:=StrToInt(ParamStr(3));
++      Request:='GET /__down?bytes='+IntToStr(Expected)+' HTTP/1.1'#13#10+
++        'Host: '+ParamStr(2)+#13#10+'Connection: close'#13#10#13#10;
++      end;
++    if S.Write(Request[1],Length(Request))<>Length(Request) then
++      raise Exception.Create('Request send failed: '+H.LastSSLErrorString);
++    if (Upload<>'') and (S.Write(Upload[1],Length(Upload))<>Length(Upload)) then
++      raise Exception.Create('Large TLS send failed: '+H.LastSSLErrorString);
++    Header:='';
++    // One-byte reads exercise decrypted leftovers and CanRead.
++    repeat
++      if not S.CanRead(2000) then raise Exception.Create('Header readiness failed');
++      N:=S.Read(Buffer,1);
++      if N<>1 then raise Exception.Create('Header receive failed: '+H.LastSSLErrorString);
++      Header:=Header+AnsiChar(Buffer[0]);
++      if Length(Header)>16384 then raise Exception.Create('Oversized response header');
++    until Copy(Header,Length(Header)-3,4)=#13#10#13#10;
++    if Pos(' 200 ',Header)=0 then raise Exception.Create('Unexpected response: '+Header);
++    Remaining:=Expected;
++    while Remaining>0 do
++      begin
++      N:=SizeOf(Buffer);
++      if Remaining<N then N:=Remaining;
++      N:=S.Read(Buffer,N);
++      if N<=0 then raise Exception.Create('Body receive failed: '+H.LastSSLErrorString);
++      Dec(Remaining,N);
++      end;
++    if not H.Shutdown(False) then raise Exception.Create('TLS shutdown failed: '+H.LastSSLErrorString);
++    if H.SSLActive then raise Exception.Create('TLS remained active after shutdown');
++    if not H.Shutdown(False) then raise Exception.Create('Repeated shutdown failed');
++    if Upload<>'' then Writeln('PASS large send bytes=',Length(Upload))
++    else Writeln('PASS fragmented receive bytes=',Expected,' elapsed=',GetTickCount64-Started);
++  finally S.Free end;
++end.
+diff --git a/packages/fcl-tls/tests/testverifyoptions.pp b/packages/fcl-tls/tests/testverifyoptions.pp
+new file mode 100644
+index 0000000000..b1ea6f4efb
+--- /dev/null
++++ b/packages/fcl-tls/tests/testverifyoptions.pp
+@@ -0,0 +1,63 @@
++program testverifyoptions;
++{$mode objfpc}{$H+}
++uses SysUtils, Classes, fphttpclient, ssockets, sslsockets, openssl, opensslsockets,
++  smartsslsockets, schannelsslsockets;
++type
++  TObserver = class
++    Calls: Integer;
++    procedure Verify(Sender: TObject; AHandler: TSSLSocketHandler; var Allow: Boolean);
++    procedure Created(Sender: TObject; AHandler: TSocketHandler);
++  end;
++procedure TObserver.Verify(Sender: TObject; AHandler: TSSLSocketHandler; var Allow: Boolean);
++begin
++  Inc(Calls);
++  Writeln('CALLBACK input=',Allow,' peer_verify=',AHandler.VerifyPeerCert);
++  Allow:=StrToBool(ParamStr(3));
++end;
++procedure TObserver.Created(Sender: TObject; AHandler: TSocketHandler);
++begin
++  Writeln('AFTER_CREATE class=',AHandler.ClassName,' peer_verify=',TSSLSocketHandler(AHandler).VerifyPeerCert);
++  if ParamStr(4)='false' then TSSLSocketHandler(AHandler).VerifyPeerCert:=False;
++end;
++var C: TFPHTTPClient; O: TObserver; B, ErrorText: String; OK: Boolean; Iter, Arg: Integer;
++begin
++  if ParamStr(1)='legacy' then
++    begin
++    if not InitSSLInterface(GetEnvironmentVariable('TLS_SSL_LIBRARY'),GetEnvironmentVariable('TLS_CRYPTO_LIBRARY')) then
++      raise Exception.Create('OpenSSL initialization failed');
++    TSSLSocketHandler.SetDefaultHandlerClass(TOpenSSLSocketHandler);
++    end
++  else if ParamStr(1)='smart' then
++    begin
++    SetSmartTLSLibraryPaths(GetEnvironmentVariable('TLS_SSL_LIBRARY'),GetEnvironmentVariable('TLS_CRYPTO_LIBRARY'),'');
++    SetSmartTLSBackend(tbOpenSSL);
++    end
++  else if ParamStr(1)='native' then SetSmartTLSBackend(tbSchannel)
++  else raise Exception.Create('Bad mode');
++  C:=TFPHTTPClient.Create(nil); O:=TObserver.Create;
++  try
++    Writeln('CLIENT_DEFAULT=',C.VerifySSLCertificate);
++    if C.VerifySSLCertificate then raise Exception.Create('HTTP default changed');
++    if ParamStr(2)<>'default' then C.VerifySSLCertificate:=StrToBool(ParamStr(2));
++    C.OnVerifySSLCertificate:=@O.Verify;
++    C.AfterSocketHandlerCreate:=@O.Created;
++    if ParamStr(1)='legacy' then C.CertCAFileName:=GetEnvironmentVariable('SSL_CERT_FILE');
++    C.ConnectTimeout:=5000; C.IOTimeout:=5000;
++    for Iter:=0 to Ord(ParamCount>=12) do
++      begin
++      Arg:=Iter*4;
++      if Iter=1 then C.VerifySSLCertificate:=StrToBool(ParamStr(9));
++      O.Calls:=0;
++    OK:=False; ErrorText:='';
++    try
++      B:=C.Get(ParamStr(5));
++      OK:=(C.ResponseStatusCode=200) and (B='local tls fixture'+#10);
++    except on E: Exception do begin ErrorText:=E.Message; Writeln('ERROR ',ErrorText) end end;
++    Writeln('RESULT ok=',OK,' callbacks=',O.Calls);
++    if OK<>StrToBool(ParamStr(6+Arg)) then raise Exception.Create('Unexpected request result');
++    if O.Calls<>StrToInt(ParamStr(7+Arg)) then raise Exception.Create('Unexpected callback count');
++    if (ParamStr(8+Arg)<>'none') and (Pos(ParamStr(8+Arg),ErrorText)=0) then
++      raise Exception.Create('Expected a certificate rejection, not another failure');
++      end;
++  finally O.Free; C.Free end;
++end.
+diff --git a/packages/fcl-tls/tests/tlsrelay.py b/packages/fcl-tls/tests/tlsrelay.py
+new file mode 100644
+index 0000000000..ee26bda4b2
+--- /dev/null
++++ b/packages/fcl-tls/tests/tlsrelay.py
+@@ -0,0 +1,95 @@
++"""Relay an authenticated public TLS connection through fragmented loopback TCP.
++
++Never decrypts traffic or changes certificate trust. testtransport authenticates
++the original hostname through ServerName. No third party Python modules needed.
++"""
++import argparse
++import socket
++import subprocess
++import threading
++import time
++
++
++def main():
++    parser = argparse.ArgumentParser()
++    parser.add_argument("exe")
++    parser.add_argument("--host", default="speed.cloudflare.com")
++    parser.add_argument("--mode", choices=["large", "timeout", "stall", "upload"], default="large")
++    parser.add_argument("--bytes", type=int, default=1048576)
++    parser.add_argument("--tls12", action="store_true")
++    args = parser.parse_args()
++    listener = socket.socket()
++    listener.bind(("127.0.0.1", 0))
++    listener.listen(1)
++    listener.settimeout(15)
++    port = listener.getsockname()[1]
++    errors = []
++    counts = [0, 0, 0]
++
++    def server():
++        try:
++            client, _ = listener.accept()
++            with client:
++                if args.mode == "stall":
++                    client.recv(16384)
++                    time.sleep(0.5)
++                    return
++                remote = socket.create_connection((args.host, 443), timeout=10)
++                remote.settimeout(10)
++                client.settimeout(10)
++
++                def pump(src, dst, fragment, index):
++                    try:
++                        while True:
++                            data = src.recv(16384)
++                            if not data:
++                                break
++                            counts[index] += len(data)
++                            if fragment:
++                                offset = 0
++                                # Fragment initial TLS record headers as well as
++                                # subsequent ciphertext and coalesced records.
++                                while offset < len(data):
++                                    size = [1, 7, 31, 1024][counts[2] % 4]
++                                    counts[2] += 1
++                                    dst.sendall(data[offset:offset + size])
++                                    offset += size
++                            else:
++                                dst.sendall(data)
++                    except (BrokenPipeError, ConnectionResetError):
++                        pass  # Expected during a client's timeout or shutdown.
++                    except Exception as exc:
++                        errors.append(str(exc))
++                    finally:
++                        try:
++                            dst.shutdown(socket.SHUT_WR)
++                        except OSError:
++                            pass
++
++                with remote:
++                    worker = threading.Thread(target=pump, args=(client, remote, False, 0))
++                    worker.start()
++                    pump(remote, client, True, 1)
++                    worker.join(12)
++        except Exception as exc:
++            errors.append(str(exc))
++        finally:
++            listener.close()
++
++    worker = threading.Thread(target=server, daemon=True)
++    worker.start()
++    mode = str(args.bytes) if args.mode == "large" else args.mode
++    result = subprocess.run([args.exe, str(port), args.host, mode, "tls12" if args.tls12 else ""], timeout=30)
++    worker.join(15)
++    print(f"relay client_bytes={counts[0]} server_bytes={counts[1]} fragments={counts[2]}")
++    if errors:
++        print("relay errors:", "; ".join(errors))
++    if worker.is_alive():
++        raise SystemExit("relay did not finish")
++    if args.mode == "upload" and not result.returncode and counts[0] < 1048576:
++        raise AssertionError("Relay did not observe the full encrypted upload")
++    raise SystemExit(result.returncode or bool(errors))
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/packages/fcl-tls/tests/tlsstub.pp b/packages/fcl-tls/tests/tlsstub.pp
+new file mode 100644
+index 0000000000..3a33abf4f8
+--- /dev/null
++++ b/packages/fcl-tls/tests/tlsstub.pp
+@@ -0,0 +1,7 @@
++library tlsstub;
++{$mode objfpc}{$H+}
++// Harmless real PE DLL with deliberately missing TLS exports.
++procedure TLSStub; cdecl;
++begin end;
++exports TLSStub;
++begin end.
+diff --git a/packages/fpmake_add.inc b/packages/fpmake_add.inc
+index 16080076c1..50719a71c9 100644
+--- a/packages/fpmake_add.inc
++++ b/packages/fpmake_add.inc
+@@ -40,6 +40,7 @@
+   add_fcl_sound(ADirectory+IncludeTrailingPathDelimiter('fcl-sound'));
+   add_fcl_stl(ADirectory+IncludeTrailingPathDelimiter('fcl-stl'));
+   add_fcl_syntax(ADirectory+IncludeTrailingPathDelimiter('fcl-syntax'));
++  add_fcl_tls(ADirectory+IncludeTrailingPathDelimiter('fcl-tls'));
+   add_fcl_web(ADirectory+IncludeTrailingPathDelimiter('fcl-web'));
+   add_fcl_wit(ADirectory+IncludeTrailingPathDelimiter('fcl-wit'));
+   add_fcl_xml(ADirectory+IncludeTrailingPathDelimiter('fcl-xml'));
+diff --git a/packages/fpmake_proc.inc b/packages/fpmake_proc.inc
+index 835d3d6daf..cf7ae5fb25 100644
+--- a/packages/fpmake_proc.inc
++++ b/packages/fpmake_proc.inc
+@@ -238,6 +238,12 @@ procedure add_fcl_syntax(const ADirectory: string);
+ {$include fcl-syntax/fpmake.pp}
+ end;
+ 
++procedure add_fcl_tls(const ADirectory: string);
++begin
++  with Installer do
++{$include fcl-tls/fpmake.pp}
++end;
++
+ {$include fcl-web/fpmake.pp}
+ 
+ procedure add_fcl_wit(const ADirectory: string);
+diff --git a/packages/gnutls/src/gnutls.pp b/packages/gnutls/src/gnutls.pp
+index ac61414d09..a0577a859b 100644
+--- a/packages/gnutls/src/gnutls.pp
++++ b/packages/gnutls/src/gnutls.pp
+@@ -23,9 +23,9 @@
+ interface
+ 
+ {$IFDEF FPC_DOTTEDUNITS}
+-uses System.CTypes;
++uses System.CTypes, System.DynLibs;
+ {$ELSE FPC_DOTTEDUNITS}
+-uses ctypes;
++uses ctypes, dynlibs;
+ {$ENDIF FPC_DOTTEDUNITS}
+ 
+ {
+@@ -2329,16 +2329,20 @@ procedure gnutls_transport_set_int(s : tgnutls_session_t; r : cint);
+ procedure LoadGnuTLS(alib : String = '');
+ procedure FreeGnuTLS;
+ Function GnuTLSloaded : Boolean;
++// Claim an already checked/pinned module under the loader lock. While claimed,
++// FreeGnuTLS and loading a different module raise an exception.
++procedure AcquireGnuTLS(const LibName: String; CheckedHandle: TLibHandle);
++procedure ReleaseGnuTLSClaim;
+ 
+ 
+ implementation
+ 
+ {$IFDEF FPC_DOTTEDUNITS}
+ uses
+-  System.SysUtils, System.DynLibs;
++  System.SysUtils;
+ {$ELSE FPC_DOTTEDUNITS}
+ uses
+-  SysUtils, dynlibs;
++  SysUtils;
+ {$ENDIF FPC_DOTTEDUNITS}
+ 
+ { was #define dname def_expr }
+@@ -2368,17 +2372,20 @@ procedure gnutls_transport_set_int(s : tgnutls_session_t; r : cint);
+ var
+   hlib : tlibhandle;
+   LoadedLibName : String;
++  GnuTLSCS: TRTLCriticalSection;
++  GnuTLSClaims: SizeInt;
+ 
+ Function GnuTLSloaded : Boolean;
+ 
+ begin
+-  Result:=hlib<>NilHandle;
++  EnterCriticalSection(GnuTLSCS);
++  try Result:=hlib<>NilHandle finally LeaveCriticalSection(GnuTLSCS) end;
+ end;
+ 
+-procedure FreeGnuTLS;
++procedure FreeGnuTLSLocked;
+ 
+ begin
+-  if Not GnuTLSLoaded then
++  if hlib=NilHandle then
+     Exit;
+   FreeLibrary(hlib);
+   hlib:=NilHandle;
+@@ -3193,7 +3200,7 @@ procedure FreeGnuTLS;
+ end;
+ 
+ 
+-procedure LoadGnuTLS(alib : String = '');
++procedure LoadGnuTLSLocked(alib: String; CheckedHandle: TLibHandle);
+ 
+   Function GPA(aName : string) : Pointer;
+ 
+@@ -3209,15 +3216,23 @@ procedure LoadGnuTLS(alib : String = '');
+   if ALib='' then
+     aLib:=LibGnuTLS;
+   // If it is a different one, unload current.
+-  if GnuTLSloaded and (aLib<>LoadedLibName) then
+-    FreeGnuTLS;
+-  // Bail out on error.
+-  if GnuTLSloaded then
+-    exit;
++  if (hlib<>NilHandle) and (CheckedHandle<>NilHandle) and (hlib<>CheckedHandle) then
++    raise Exception.Create('GnuTLS binding already belongs to another module');
++  if (hlib<>NilHandle) and (aLib<>LoadedLibName) then
++    begin
++    if GnuTLSClaims>0 then raise Exception.Create('GnuTLS binding is claimed; cannot reload');
++    FreeGnuTLSLocked;
++    end;
++  if hlib<>NilHandle then Exit;
+   // Load !
+   hlib:=LoadLibrary(alib);
+   if (hlib=NilHandle) then
+     raise Exception.Create(format('Could not load library: %s',[alib]));
++  if (CheckedHandle<>NilHandle) and (hlib<>CheckedHandle) then
++    begin
++    FreeLibrary(hlib); hlib:=NilHandle;
++    raise Exception.Create('Loaded GnuTLS module differs from the checked module');
++    end;
+   pointer(gnutls_handshake_description_get_name):=GPA('gnutls_handshake_description_get_name');
+   pointer(gnutls_pk_algorithm_get_name):=GPA('gnutls_pk_algorithm_get_name');
+   pointer(gnutls_init):=GPA('gnutls_init');
+@@ -4027,4 +4042,39 @@ procedure LoadGnuTLS(alib : String = '');
+   LoadedLibName:=aLib;
+ end;
+ 
++procedure FreeGnuTLS;
++begin
++  EnterCriticalSection(GnuTLSCS);
++  try
++    if GnuTLSClaims>0 then raise Exception.Create('GnuTLS binding is claimed; cannot unload');
++    FreeGnuTLSLocked;
++  finally LeaveCriticalSection(GnuTLSCS) end;
++end;
++
++procedure LoadGnuTLS(alib: String = '');
++begin
++  EnterCriticalSection(GnuTLSCS);
++  try LoadGnuTLSLocked(alib,NilHandle) finally LeaveCriticalSection(GnuTLSCS) end;
++end;
++
++procedure AcquireGnuTLS(const LibName: String; CheckedHandle: TLibHandle);
++begin
++  if CheckedHandle=NilHandle then raise Exception.Create('GnuTLS checked handle is empty');
++  EnterCriticalSection(GnuTLSCS);
++  try
++    LoadGnuTLSLocked(LibName,CheckedHandle);
++    Inc(GnuTLSClaims);
++  finally LeaveCriticalSection(GnuTLSCS) end;
++end;
++
++procedure ReleaseGnuTLSClaim;
++begin
++  EnterCriticalSection(GnuTLSCS);
++  try if GnuTLSClaims>0 then Dec(GnuTLSClaims) finally LeaveCriticalSection(GnuTLSCS) end;
++end;
++
++initialization
++  InitCriticalSection(GnuTLSCS);
++finalization
++  DoneCriticalSection(GnuTLSCS);
+ end.
+diff --git a/packages/gnutls/src/gnutlssockets.pp b/packages/gnutls/src/gnutlssockets.pp
+index 83a2a63bff..e86c4b7d0e 100644
+--- a/packages/gnutls/src/gnutlssockets.pp
++++ b/packages/gnutls/src/gnutlssockets.pp
+@@ -50,6 +50,8 @@ interface
+     function InitSslKeys: boolean;virtual;
+     function GetLastSSLErrorCode: Integer; override;
+     function GetLastSSLErrorString: String; override;
++    // Allows specialized clients to inspect the verification result.
++    property Session: tgnutls_session_t read FSession;
+     // Install CertificateData.ALPNProtocols on FSession before the handshake.
+     // Inert (no-op) when the list is empty, so non-ALPN users are unchanged.
+     function InstallALPNProtocols: Boolean; virtual;
+@@ -405,7 +407,8 @@ function TGNUTLSSocketHandler.Connect: Boolean;
+       if not Result then
+         exit;
+       end;
+-    gnutls_session_set_verify_cert(Fsession,PAnsiChar(FCurrentHostName),0);
++    if VerifyPeerCert then
++      gnutls_session_set_verify_cert(Fsession,PAnsiChar(FCurrentHostName),0);
+     end;
+   if Not Result then
+     exit;
+diff --git a/packages/openssl/src/openssl.pas b/packages/openssl/src/openssl.pas
+index bb37344923..d2ce013e2d 100644
+--- a/packages/openssl/src/openssl.pas
++++ b/packages/openssl/src/openssl.pas
+@@ -1563,6 +1563,11 @@     stack_st_PKCS7 = record
+ function IsSSLloaded: Boolean;
+ function InitSSLInterface(Const aSSLName, acryptoName : AnsiString) : Boolean; overload;
+ function InitSSLInterface: Boolean; overload;
++// Atomically bind and claim the caller's already checked/pinned modules.
++// A claim prevents DestroySSLInterface until ReleaseSSLInterfaceClaim.
++function AcquireSSLInterface(const SSLName, CryptoName: AnsiString;
++  CheckedSSL, CheckedCrypto: TLibHandle): Boolean;
++procedure ReleaseSSLInterfaceClaim;
+ function DestroySSLInterface: Boolean;
+ 
+ // compatibility with old versions.
+@@ -6229,51 +6234,70 @@ function InitSSLInterface: Boolean;
+   Result:=InitSSLInterface('','');
+ end;
+ 
++var
++  SSLInterfaceClaims: SizeInt;
++
++// SSLCS must be held. Checked handles are optional for the legacy API.
++function InitSSLInterfaceLocked(const SSLName, CryptoName: AnsiString;
++  CheckedSSL, CheckedCrypto: TLibHandle): Boolean;
++begin
++  if SSLloaded then
++    Exit((CheckedSSL=NilHandle) or
++      ((SSLLibHandle=CheckedSSL) and (SSLUtilHandle=CheckedCrypto)));
++  Result:=LoadLibraries(SSLName,CryptoName);
++  if Result and (CheckedSSL<>NilHandle) then
++    Result:=(SSLLibHandle=CheckedSSL) and (SSLUtilHandle=CheckedCrypto);
++  if not Result then
++    begin UnloadLibraries; Exit end;
++  LoadSSLEntryPoints;
++  LoadUtilEntryPoints;
++  if assigned(_SslLibraryInit) then _SslLibraryInit;
++  if assigned(_SslLoadErrorStrings) then _SslLoadErrorStrings;
++  if assigned(_OPENSSLaddallalgorithms) then _OPENSSLaddallalgorithms;
++  if assigned(_CRYPTOnumlocks) and assigned(_CRYPTOsetlockingcallback) then InitLocks;
++  SSLloaded:=True;
++{$IFDEF OS2}
++  Result:=InitEMXHandles;
++{$ELSE OS2}
++  Result:=True;
++{$ENDIF OS2}
++end;
++
+ function InitSSLInterface(Const aSSLName, acryptoName : AnsiString) : Boolean;
++begin
++  // Preserve the legacy initialized fast path. Strict acquisition always
++  // takes SSLCS and verifies module identity before claiming the binding.
++  Result:=SSLloaded;
++  if Result then Exit;
++  EnterCriticalSection(SSLCS);
++  try Result:=InitSSLInterfaceLocked(aSSLName,aCryptoName,NilHandle,NilHandle)
++  finally LeaveCriticalSection(SSLCS) end;
++end;
+ 
++function AcquireSSLInterface(const SSLName, CryptoName: AnsiString;
++  CheckedSSL, CheckedCrypto: TLibHandle): Boolean;
+ begin
+-  Result:=SSLLoaded;
+-  if Result then
+-    exit;
++  if (CheckedSSL=NilHandle) or (CheckedCrypto=NilHandle) then Exit(False);
+   EnterCriticalSection(SSLCS);
+   try
+-    if SSLloaded then
+-      Exit(True);
+-    Result:=LoadLibraries(aSSLName,aCryptoName);
+-    if Not Result then
+-      begin
+-      UnloadLibraries;
+-      Exit;
+-      end;
+-    LoadSSLEntryPoints;
+-    LoadUtilEntryPoints;
+-    //init library
+-    if assigned(_SslLibraryInit) then
+-      _SslLibraryInit;
+-    if assigned(_SslLoadErrorStrings) then
+-      _SslLoadErrorStrings;
+-    if assigned(_OPENSSLaddallalgorithms) then
+-      _OPENSSLaddallalgorithms;
+-    if assigned(_CRYPTOnumlocks) and assigned(_CRYPTOsetlockingcallback) then
+-      InitLocks;
+-    SSLloaded := True;
+-{$IFDEF OS2}
+-    Result := InitEMXHandles;
+-{$ELSE OS2}
+-    Result := True;
+-{$ENDIF OS2}
+-  finally
+-    LeaveCriticalSection(SSLCS);
+-  end;
++    Result:=InitSSLInterfaceLocked(SSLName,CryptoName,CheckedSSL,CheckedCrypto);
++    if Result then Inc(SSLInterfaceClaims);
++  finally LeaveCriticalSection(SSLCS) end;
++end;
++
++procedure ReleaseSSLInterfaceClaim;
++begin
++  EnterCriticalSection(SSLCS);
++  try if SSLInterfaceClaims>0 then Dec(SSLInterfaceClaims)
++  finally LeaveCriticalSection(SSLCS) end;
+ end;
+ 
+ function DestroySSLInterface: Boolean;
+ begin
+-  Result:=Not isSSLLoaded;
+-  if Result then
+-   exit;
+   EnterCriticalSection(SSLCS);
+   try
++    if SSLInterfaceClaims>0 then Exit(False);
++    if not SSLloaded then Exit(True);
+     if assigned(_CRYPTOnumlocks) and assigned(_CRYPTOsetlockingcallback) then
+       FreeLocks;
+     EVPCleanup;
+diff --git a/packages/openssl/src/opensslsockets.pp b/packages/openssl/src/opensslsockets.pp
+index 8f16eb7c36..52f8bf2213 100644
+--- a/packages/openssl/src/opensslsockets.pp
++++ b/packages/openssl/src/opensslsockets.pp
+@@ -31,6 +31,7 @@ interface
+     function CheckSSL(SSLResult: Pointer): Boolean;
+     function CreateSSLContext(AType: TSSLType): TSSLContext; virtual;
+     function InitContext(NeedCertificate: Boolean): Boolean; virtual;
++    procedure ConfigurePeerIdentity(const HostName: AnsiString); virtual;
+     function DoneContext: Boolean; virtual;
+     function InitSslKeys: boolean;virtual;
+     Function GetLastSSLErrorString : String; override;
+@@ -218,6 +219,12 @@ function NormalizeHostNameForSNI(const AHostName: AnsiString): AnsiString;
+     Delete(Result,Length(Result),1);
+ end;
+ 
++procedure TOpenSSLSocketHandler.ConfigurePeerIdentity(const HostName: AnsiString);
++begin
++  // Preserve the explicit backend's legacy DNS verification behavior.
++  FSSL.Set1Host(HostName);
++end;
++
+ function TOpenSSLSocketHandler.Connect: Boolean;
+ 
+ var
+@@ -237,7 +244,7 @@ function TOpenSSLSocketHandler.Connect: Boolean;
+        FSSL.Ctrl(SSL_CTRL_SET_TLSEXT_HOSTNAME,TLSEXT_NAMETYPE_host_name,PAnsiChar(SNIHostName));
+        end;
+      if VerifyPeerCert and (Socket is TInetSocket) then
+-       FSSL.Set1Host(NormalizeHostNameForSNI(AnsiString((Socket as TInetSocket).Host)));
++       ConfigurePeerIdentity(NormalizeHostNameForSNI(AnsiString((Socket as TInetSocket).Host)));
+      Result:=CheckSSL(FSSL.Connect);
+      //if Result and VerifyPeerCert then
+      //  Result:=(FSSL.VerifyResult<>0) or (not DoVerifyCert);

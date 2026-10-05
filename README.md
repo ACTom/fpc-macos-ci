@@ -1,0 +1,35 @@
+# FPC macOS native TLS test carrier
+
+This repository carries only the task patch, exact source baseline and a bounded
+manual CI workflow. All workflows and CI-only orchestration live in this
+repository, outside the FPC patch. It does not mirror FPC history or publish an
+upstream PR.
+
+The owner's repository is public. First-run conditions: exactly two standard
+GitHub-hosted jobs, `macos-15-intel` (x86_64) and `macos-15` (arm64), each with a
+15-minute timeout. Only `workflow_dispatch` is enabled; no push, PR or schedule
+trigger exists. A concurrency group prevents simultaneous duplicate runs.
+First dispatch remains subject to the owner's confirmation. No run is requested
+by committing/pushing this payload.
+
+The patch SHA256 and FPC base commit are fixed in `payload/manifest.json`. Each
+job downloads one source snapshot at that commit, checks/applies the patch, and
+uses the runner's installed Xcode SDK/clang to build and execute an API/Blocks
+construction probe. No compiler, SDK or package is installed. Existing FPC, if
+present, is inventoried; its absence is explicitly reported.
+
+**This stage is not FPC native HTTPS acceptance.** The probe never starts a TCP
+or TLS connection. Trust, hostname verification, stream ownership, cancellation,
+late callbacks and Pascal runtime tests remain future stages. See the applied
+patch's `packages/fcl-tls/docs/macos-transport.md` for the connection seam audit
+and required next tests. A compatible Darwin bootstrap compiler/RTL remains a
+provisioning requirement before an actual FPC build can run.
+
+Windows validation: package build and complete offline runner exit 0; 87 real
+local TLS cases passed. A bounded native online recheck retains one early TCP
+truncation at expired.badssl.com as failure; it is not certificate rejection.
+No real GnuTLS runtime or macOS runtime claim is made.
+
+The standard macOS labels are documented at
+https://docs.github.com/en/actions/reference/runners/github-hosted-runners
+and are free for public repositories. No larger/paid runner is configured.
