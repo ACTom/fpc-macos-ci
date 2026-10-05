@@ -48,5 +48,5 @@ jobs:
         if: always()
         shell: bash
         run: |
-          printf '%s\n' 'This run checks payload applicability, Apple API/Blocks and production C bridge construction. No TCP/TLS connection starts.' \
+          printf '%s\n' 'This run checks payload applicability, Apple API/Blocks and production C bridge construction. Native construction probes start no connection.' \
             'It is not FPC native HTTPS/trust/hostname/lifetime acceptance.' >> "$GITHUB_STEP_SUMMARY"

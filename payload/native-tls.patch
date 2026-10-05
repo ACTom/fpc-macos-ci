@@ -813,10 +813,10 @@ index 0000000000..9cb6da8afe
 +include ../build/Makefile.pkg
 diff --git a/packages/fcl-tls/README.md b/packages/fcl-tls/README.md
 new file mode 100644
-index 0000000000..6c8cf937c0
+index 0000000000..7912bc5183
 --- /dev/null
 +++ b/packages/fcl-tls/README.md
-@@ -0,0 +1,191 @@
+@@ -0,0 +1,197 @@
 +# Client TLS selection and native Windows TLS
 +
 +This increment adds a Windows Schannel client and an opt-in `smartsslsockets`
@@ -1008,16 +1008,24 @@ index 0000000000..6c8cf937c0
 +[macOS adapter](docs/macos-transport.md) for the native build and ownership
 +contract. All GitHub Actions workflows and CI-only orchestration stay in the
 +separate [test carrier](https://github.com/ACTom/fpc-macos-ci).
++
++The first actual macOS preflight applied the patch and passed Apple API/Blocks
++construction plus C bridge object compilation on both architectures. Overall
++CI failed at a clang warning in the native test harness; its correction is
++prepared but unverified on macOS. Neither runner had FPC. See validation.md
++and the linked run in docs/macos-transport.md for exact limits.
 diff --git a/packages/fcl-tls/docs/macos-transport.md b/packages/fcl-tls/docs/macos-transport.md
 new file mode 100644
-index 0000000000..6a28917062
+index 0000000000..f62ebcf4c4
 --- /dev/null
 +++ b/packages/fcl-tls/docs/macos-transport.md
-@@ -0,0 +1,250 @@
+@@ -0,0 +1,272 @@
 +# Proposed macOS connection adapter
 +
 +The standalone C connection bridge and Pascal stream are now implemented in
-+source. Their real macOS compilation/runtime is pending. The HTTP ownership seam
++source. Their first real macOS preflight compiled the C bridge object on both
++architectures; linking/construction of its test harness and Pascal native
++runtime remain pending. The HTTP ownership seam
 +below is still a design; fphttpclient and smart Darwin registration have not
 +been switched to the native transport.
 +
@@ -1264,6 +1272,26 @@ index 0000000000..6a28917062
 +SDK/dynamic-symbol checks, TLS trust/hostname matrix, callback cancellation races,
 +ASan/TSan, automatic C-object build integration and HTTP transport registration
 +remain required before macOS HTTPS acceptance.
++
++## First real macOS CI outcome
++
++[Run 37319310587](https://github.com/ACTom/fpc-macos-ci/actions/runs/37319310587)
++tested carrier commit 57c74fec6a0ff35c8cc93ee1a7702b20db793b95 on the two
++approved standard runners. Both used macOS 15.7.9, Xcode 16.4's macOS 15.5 SDK
++and Apple clang 17. The SHA-fixed FPC patch applied, the direct API/Blocks
++construction probe passed, and the production C bridge compiled with warnings
++as errors on x86_64 and arm64. The overall run failed when compiling the native
++C test harness: clang -Wstring-plus-int rejected `"xyz" + offset` under -Werror.
++That expression now uses a named character array plus explicit element address;
++no warning option was disabled. The corrected harness has not been recompiled
++or executed on macOS. Production dynamic-symbol/object construction, actual
++TLS, EOF/cancellation/lifetime tests and Pascal linking remain NOT RUN.
++
++Neither runner had an existing FPC bootstrap on PATH. No compiler/SDK/software
++was installed. Only the one authorized manual workflow run was dispatched; the
++fix is prepared for a subsequent explicitly bounded validation. CI orchestration
++continues to live only in the separate test repository. The source snapshot
++was downloaded over HTTPS; the native construction probes opened no connection.
 diff --git a/packages/fcl-tls/docs/openssl-eof.md b/packages/fcl-tls/docs/openssl-eof.md
 new file mode 100644
 index 0000000000..475c795980
@@ -1361,10 +1389,10 @@ index 0000000000..475c795980
 +- [OpenSSL s_client diagnostics](https://docs.openssl.org/3.5/man1/openssl-s_client/)
 diff --git a/packages/fcl-tls/docs/validation.md b/packages/fcl-tls/docs/validation.md
 new file mode 100644
-index 0000000000..77612ae293
+index 0000000000..e1b0b830ac
 --- /dev/null
 +++ b/packages/fcl-tls/docs/validation.md
-@@ -0,0 +1,233 @@
+@@ -0,0 +1,240 @@
 +# Windows increment validation
 +
 +Recorded on 2026-10-05 against base commit
@@ -1598,6 +1626,13 @@ index 0000000000..77612ae293
 +The standalone model additionally compiles/runs with the existing FPC 3.2.2
 +Windows bootstrap; this is not a Darwin compile or whole-branch compatibility
 +claim. Previous public expired.badssl truncation failure remains in the record.
++
++First macOS preflight 37319310587: both fixed-payload application and direct
++Apple API/Blocks construction passed; production C object compilation passed
++on x86_64 and arm64 with SDK 15.5/clang 17. Overall CI FAILED because the C test
++harness triggered -Wstring-plus-int under -Werror. Its named-array correction is
++prepared, not macOS-verified. Both runners lacked FPC; bridge harness runtime,
++Pascal linking and native TLS matrix were NOT RUN. No extra run was dispatched.
 diff --git a/packages/fcl-tls/fpmake.pp b/packages/fcl-tls/fpmake.pp
 new file mode 100644
 index 0000000000..11d280c6cb
@@ -1677,12 +1712,12 @@ index 0000000000..452fe3dd98
 +src/networkframeworktls.pp=namespaced/System.Net.NetworkFrameworkTLS.pp
 diff --git a/packages/fcl-tls/src/macos/networkframeworkbridge.c b/packages/fcl-tls/src/macos/networkframeworkbridge.c
 new file mode 100644
-index 0000000000..fe216507ef
+index 0000000000..5b29f95836
 --- /dev/null
 +++ b/packages/fcl-tls/src/macos/networkframeworkbridge.c
 @@ -0,0 +1,607 @@
 +/* Part of FCL; see COPYING.FPC.
-+ * PENDING actual Apple SDK compilation and native runtime acceptance.
++ * Object compilation passed SDK 15.5 on x86_64/arm64; native runtime acceptance is pending.
 + * See networkframeworkbridge.h for the build, ABI and ownership contracts.
 + */
 +#if !defined(__APPLE__) || !defined(__MACH__)
@@ -2290,12 +2325,12 @@ index 0000000000..fe216507ef
 +}
 diff --git a/packages/fcl-tls/src/macos/networkframeworkbridge.h b/packages/fcl-tls/src/macos/networkframeworkbridge.h
 new file mode 100644
-index 0000000000..fbc5677aa9
+index 0000000000..8f22b24e7c
 --- /dev/null
 +++ b/packages/fcl-tls/src/macos/networkframeworkbridge.h
 @@ -0,0 +1,74 @@
 +/* Network.framework client TCP+TLS bridge. Part of FCL; see COPYING.FPC.
-+ * PENDING actual Apple SDK build and x86_64/arm64 macOS runtime acceptance.
++ * Object compilation passed SDK 15.5 x86_64/arm64; linking/runtime acceptance remains pending.
 + *
 + * Compile as C (not Objective-C) with the host's authorized Apple SDK:
 + *   xcrun clang -std=c11 -fblocks -O2 -Wall -Wextra -Werror \
@@ -3365,10 +3400,10 @@ index 0000000000..8117f72ea2
 +}
 diff --git a/packages/fcl-tls/tests/macos/testnetworkbridge.c b/packages/fcl-tls/tests/macos/testnetworkbridge.c
 new file mode 100644
-index 0000000000..6f61aff686
+index 0000000000..07c5920666
 --- /dev/null
 +++ b/packages/fcl-tls/tests/macos/testnetworkbridge.c
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,205 @@
 +/* Integration checks for the real macOS C bridge, not a simulated Network API.
 + * Part of FCL; see COPYING.FPC.
 + * PENDING: build and run with an Apple SDK on x86_64 and arm64 macOS.
@@ -3457,6 +3492,7 @@ index 0000000000..6f61aff686
 +
 +static void echo_check(void *ctx)
 +{
++    static const char marker[] = "xyz";
 +    unsigned char sent[137], received[53];
 +    size_t offset = 0;
 +    int d = 0, e = 0;
@@ -3482,11 +3518,11 @@ index 0000000000..6f61aff686
 +    }
 +    check(fpc_nw_can_read(ctx, 1, &d, &e) == 0 && d == 0 && e == 0,
 +          "readiness timeout is benign", d, e);
-+    check(fpc_nw_write(ctx, "xyz", 3, 5000, &d, &e) == 3,
++    check(fpc_nw_write(ctx, marker, 3, 5000, &d, &e) == 3,
 +          "write remains usable after readiness timeout", d, e);
 +    for (int offset = 0; offset < 3;) {
 +        int n = fpc_nw_read(ctx, received, 3 - offset, 5000, &d, &e);
-+        check(n > 0 && memcmp(received, "xyz" + offset, (size_t)n) == 0,
++        check(n > 0 && memcmp(received, &marker[offset], (size_t)n) == 0,
 +              "pending receive survives readiness timeout", d, e);
 +        offset += n;
 +    }

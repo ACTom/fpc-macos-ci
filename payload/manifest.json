@@ -2,7 +2,7 @@
   "base_repository": "https://gitlab.com/ACTom/source",
   "base_commit": "56900cd3a58b32cf3c0f8a3b48443a139bab8e0d",
   "source_branch": "feature/native-tls-smart-sockets",
-  "patch_sha256": "8b26ce5a34152357ef3573f78899305fd7fcba491fdfdee14b8f610392cd375f",
+  "patch_sha256": "60a97da6d9b85433e7d7c8fa5aa04dbfadfdb53486174cd94419ec26016ba5bc",
   "scope": "Windows native TLS/selector/verification fix; standalone macOS C bridge and Pascal stream implementation pending Apple validation",
   "windows_validation": {
     "package_build_exit": 0,
@@ -16,10 +16,30 @@
   "not_run": [
     "real GnuTLS",
     "OpenSSL1.1.1",
-    "Apple SDK/C bridge compilation before first macOS run",
+    "corrected macOS C harness compilation/runtime",
     "macOS native TLS fixture matrix and Pascal linking",
     "fphttpclient Network.framework transport integration"
   ],
   "ci_orchestration": "ACTom/fpc-macos-ci only; excluded from FPC source patch",
-  "first_ci_scope": "two standard macOS jobs, manual, 15min each; API and production C construction only, no TCP/TLS access; authorized once"
+  "first_ci_scope": "two standard macOS jobs, manual, 15min each; API and production C construction only, no TCP/TLS access; authorized once",
+  "macos_preflight": {
+    "run_id": 37319310587,
+    "tested_carrier_commit": "57c74fec6a0ff35c8cc93ee1a7702b20db793b95",
+    "overall": "failure",
+    "architectures": [
+      "x86_64",
+      "arm64"
+    ],
+    "macos": "15.7.9",
+    "sdk": "15.5",
+    "clang": "17.0.0",
+    "passed": [
+      "exact-base patch applicability",
+      "Apple API/Blocks construction",
+      "production C bridge object compilation"
+    ],
+    "failure": "native C harness -Wstring-plus-int under -Werror; named-array correction prepared, not rerun",
+    "fpc_bootstrap": "absent on both runners",
+    "native_tls_runtime": "not run"
+  }
 }
