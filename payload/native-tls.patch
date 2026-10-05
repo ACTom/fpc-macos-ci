@@ -1789,10 +1789,10 @@ index 0000000000..2a7fff99db
 +src/networkframeworksslsockets.pp=namespaced/System.Net.NetworkFrameworkSSLSockets.pp
 diff --git a/packages/fcl-tls/src/networkframeworkapi.pp b/packages/fcl-tls/src/networkframeworkapi.pp
 new file mode 100644
-index 0000000000..28aafe272f
+index 0000000000..40d4349dfe
 --- /dev/null
 +++ b/packages/fcl-tls/src/networkframeworkapi.pp
-@@ -0,0 +1,199 @@
+@@ -0,0 +1,212 @@
 +{ Part of FCL; see COPYING.FPC.
 +  Minimal C API declarations for a pure Pascal Network.framework transport.
 +  Blocks are FPC cblocks, not ordinary cdecl procedure pointers. Declarations
@@ -1904,6 +1904,7 @@ index 0000000000..28aafe272f
 +{ Returns immutable process-lifetime symbols, or nil when unavailable. }
 +function NetworkFrameworkSymbols: PNetworkFrameworkFunctions;
 +function NetworkFrameworkSymbolsAvailable: Boolean;
++function NetworkFrameworkSymbolError: String;
 +implementation
 +{$IFDEF FPC_DOTTEDUNITS}
 +uses System.DynLibs;
@@ -1914,6 +1915,7 @@ index 0000000000..28aafe272f
 +  Symbols: TNetworkFrameworkFunctions;
 +  LoadLock: TRTLCriticalSection;
 +  LoadAttempted, Loaded: Boolean;
++  AvailabilityError: String;
 +  NetworkHandle, SecurityHandle, SystemHandle: TLibHandle;
 +
 +function Resolve(Handle: TLibHandle; const Name: AnsiString; var ProcAddress): Boolean;
@@ -1922,17 +1924,19 @@ index 0000000000..28aafe272f
 +  Address:=GetProcedureAddress(Handle,Name);
 +  PPointer(@ProcAddress)^:=Address;
 +  Result:=Address<>nil;
++  if not Result then AvailabilityError:='Missing mandatory system symbol: '+Name;
 +end;
 +
 +procedure LoadSymbols;
 +begin
 +{$ifdef FPC_NATIVE_NETWORK_FRAMEWORK}
 +  if (SizeOf(TNWBoolean)<>1) or (SizeOf(cint)<>4) or
-+    (SizeOf(cuint32)<>4) or (SizeOf(csize_t)<>SizeOf(Pointer)) then Exit;
++    (SizeOf(cuint32)<>4) or (SizeOf(csize_t)<>SizeOf(Pointer)) then begin AvailabilityError:='Unsupported native ABI widths'; Exit end;
 +  NetworkHandle:=LoadLibrary('/System/Library/Frameworks/Network.framework/Network');
 +  SecurityHandle:=LoadLibrary('/System/Library/Frameworks/Security.framework/Security');
 +  SystemHandle:=LoadLibrary('/usr/lib/libSystem.B.dylib');
-+  if (NetworkHandle=NilHandle) or (SecurityHandle=NilHandle) or (SystemHandle=NilHandle) then Exit;
++  if (NetworkHandle=NilHandle) or (SecurityHandle=NilHandle) or (SystemHandle=NilHandle) then
++    begin AvailabilityError:='Required system Network/Security/libSystem unavailable'; Exit end;
 +  if not Resolve(NetworkHandle,'nw_parameters_create_secure_tcp',Symbols.ParametersCreateSecureTCP) then Exit;
 +  if not Resolve(NetworkHandle,'nw_tls_copy_sec_protocol_options',Symbols.TLSCopySecurityOptions) then Exit;
 +  if not Resolve(NetworkHandle,'nw_endpoint_create_host',Symbols.EndpointCreateHost) then Exit;
@@ -1964,6 +1968,8 @@ index 0000000000..28aafe272f
 +  if not Resolve(SystemHandle,'dispatch_semaphore_wait',Symbols.SemaphoreWait) then Exit;
 +  if not Resolve(SystemHandle,'dispatch_time',Symbols.DispatchTime) then Exit;
 +  Loaded:=True;
++{$else}
++  AvailabilityError:='Requires macOS x86_64 or arm64';
 +{$endif}
 +end;
 +
@@ -1985,6 +1991,13 @@ index 0000000000..28aafe272f
 +function NetworkFrameworkSymbolsAvailable: Boolean;
 +begin
 +  Result:=NetworkFrameworkSymbols<>nil;
++end;
++
++function NetworkFrameworkSymbolError: String;
++begin
++  NetworkFrameworkSymbols;
++  EnterCriticalSection(LoadLock);
++  try Result:=AvailabilityError finally LeaveCriticalSection(LoadLock) end;
 +end;
 +
 +initialization
@@ -2030,10 +2043,10 @@ index 0000000000..92d5553a00
 +end.
 diff --git a/packages/fcl-tls/src/networkframeworknative.pp b/packages/fcl-tls/src/networkframeworknative.pp
 new file mode 100644
-index 0000000000..374c2888f3
+index 0000000000..bcaba3b6a0
 --- /dev/null
 +++ b/packages/fcl-tls/src/networkframeworknative.pp
-@@ -0,0 +1,880 @@
+@@ -0,0 +1,906 @@
 +{ Part of FCL; see COPYING.FPC.
 +  Pure Pascal Network.framework client TCP+TLS provider. No C object dependency.
 +  Callback methods belong to an explicitly retained context, never the stream.
@@ -2062,6 +2075,12 @@ index 0000000000..374c2888f3
 +{$ENDIF}
 +function NetworkFrameworkAvailable: Boolean;
 +function NativeNetworkFrameworkAPI: TFPNWAPI;
++function NetworkFrameworkAvailabilityError: String;
++{$ifdef FPC_NETWORKFRAMEWORK_DIAGNOSTICS}
++{ Test-only process counters: observe eventual release after native callbacks. }
++function NetworkFrameworkLiveContexts: LongInt;
++function NetworkFrameworkDestroyedContexts: LongInt;
++{$endif}
 +{$ifdef FPC_NETWORKFRAMEWORK_MODEL}
 +{ Explicit test build only: uses the production context/state helpers while
 +  replacing native completion delivery. This is not a macOS test. }
@@ -2098,6 +2117,7 @@ index 0000000000..374c2888f3
 +  private
 +    FLock: TRTLCriticalSection;
 +    FLockInitialized: Boolean;
++    {$ifdef FPC_NETWORKFRAMEWORK_DIAGNOSTICS}FCounted: Boolean;{$endif}
 +    FModelEvent: PRTLEvent;
 +    FReferences: LongInt;
 +    FFunctions: PNetworkFrameworkFunctions;
@@ -2145,6 +2165,16 @@ index 0000000000..374c2888f3
 +{$ifdef FPC_NETWORKFRAMEWORK_MODEL}
 +var ModelDestroyed: LongInt;
 +{$endif}
++{$ifdef FPC_NETWORKFRAMEWORK_DIAGNOSTICS}
++var LiveContexts, DestroyedContexts: LongInt;
++function NetworkFrameworkLiveContexts: LongInt;
++begin Result:=InterlockedCompareExchange(LiveContexts,0,0) end;
++function NetworkFrameworkDestroyedContexts: LongInt;
++begin Result:=InterlockedCompareExchange(DestroyedContexts,0,0) end;
++{$endif}
++
++function NetworkFrameworkAvailabilityError: String;
++begin Result:=NetworkFrameworkSymbolError end;
 +
 +function ValidPort(Port: PAnsiChar): Boolean;
 +var Value, Digits: Cardinal;
@@ -2167,6 +2197,9 @@ index 0000000000..374c2888f3
 +  inherited Create;
 +  InitCriticalSection(FLock);
 +  FLockInitialized:=True;
++{$ifdef FPC_NETWORKFRAMEWORK_DIAGNOSTICS}
++  InterlockedIncrement(LiveContexts); FCounted:=True;
++{$endif}
 +  FReferences:=1;
 +  FFunctions:=Functions;
 +  FTimebase.Numer:=1000000; FTimebase.Denom:=1;
@@ -2200,6 +2233,10 @@ index 0000000000..374c2888f3
 +  if FLockInitialized then DoneCriticalSection(FLock);
 +{$ifdef FPC_NETWORKFRAMEWORK_MODEL}
 +  InterlockedIncrement(ModelDestroyed);
++{$endif}
++{$ifdef FPC_NETWORKFRAMEWORK_DIAGNOSTICS}
++  if FCounted then
++    begin InterlockedIncrement(DestroyedContexts); InterlockedDecrement(LiveContexts) end;
 +{$endif}
 +  inherited Destroy;
 +end;
@@ -2364,7 +2401,9 @@ index 0000000000..374c2888f3
 +  Complete: TSecVerifyComplete); cdecl;
 +begin
 +  { This per-connection block changes neither system trust nor TLS policy. }
-+  try if Assigned(Complete) then Complete(True) except end;
++  { Apple supplies a non-null completion block. Assigned attempts a TMethod
++    conversion for cblocks in this compiler and cannot be used here. }
++  try Complete(True) except end;
 +end;
 +{$endif}
 +
@@ -4042,10 +4081,10 @@ index 0000000000..d0f5d95298
 +end.
 diff --git a/packages/fcl-tls/tests/macos/testnetworknative.pp b/packages/fcl-tls/tests/macos/testnetworknative.pp
 new file mode 100644
-index 0000000000..e89d4e2b88
+index 0000000000..5685a2d161
 --- /dev/null
 +++ b/packages/fcl-tls/tests/macos/testnetworknative.pp
-@@ -0,0 +1,271 @@
+@@ -0,0 +1,295 @@
 +{ Part of FCL; see COPYING.FPC.
 +  Integration harness for the pure Pascal native provider; no C object required.
 +  PENDING: compile/link and run on x86_64 and arm64 macOS with an Apple SDK.
@@ -4218,6 +4257,21 @@ index 0000000000..e89d4e2b88
 +  Writeln('PASS concurrent Close interrupts unlimited caller under operation hold');
 +end;
 +
++procedure AwaitNativeRelease;
++{$ifdef FPC_NETWORKFRAMEWORK_DIAGNOSTICS}
++var Started: QWord;
++{$endif}
++begin
++{$ifdef FPC_NETWORKFRAMEWORK_DIAGNOSTICS}
++  Started:=GetTickCount64;
++  while (NetworkFrameworkLiveContexts<>0) and (GetTickCount64-Started<5000) do Sleep(1);
++  Check(NetworkFrameworkLiveContexts=0,'all native contexts eventually released',0,0);
++  Writeln('PASS native context release; destroyed=',NetworkFrameworkDestroyedContexts);
++{$else}
++  Writeln('NOT RUN context-release observation: build with FPC_NETWORKFRAMEWORK_DIAGNOSTICS');
++{$endif}
++end;
++
 +procedure RunNative;
 +var Context: Pointer; Host, Port, Mode: AnsiString;
 +    Verify, Domain, Code, Status, ExpectedDomain, ExpectedCode, Count, Index: LongInt;
@@ -4226,7 +4280,7 @@ index 0000000000..e89d4e2b88
 +  API:=NativeNetworkFrameworkAPI;
 +  if not NetworkFrameworkAvailable then
 +    begin
-+    Writeln('SKIP native Network.framework provider unavailable on this target/system');
++    Writeln('SKIP native Network.framework provider unavailable: ',NetworkFrameworkAvailabilityError);
 +    Halt(77);
 +    end;
 +  Check(Assigned(API.CreateConnection) and Assigned(API.Connect) and
@@ -4300,7 +4354,10 @@ index 0000000000..e89d4e2b88
 +        'transport abort is an error',Domain,Code);
 +      Writeln('PASS transport abort rejected as clean EOF');
 +      end;
-+  finally if Context<>nil then API.Close(Context) end;
++  finally
++    if Context<>nil then API.Close(Context);
++    AwaitNativeRelease;
++  end;
 +end;
 +{$endif}
 +
@@ -4309,8 +4366,14 @@ index 0000000000..e89d4e2b88
 +{$ifdef FPC_NETWORKFRAMEWORK_MODEL}
 +    RunNetworkFrameworkCoreModelTests;
 +    Writeln('PASS shared Pascal context/state/ABI model; NOT macOS or TLS runtime validation');
++{$ifdef FPC_NETWORKFRAMEWORK_DIAGNOSTICS}
++    if (NetworkFrameworkLiveContexts<>0) or (NetworkFrameworkDestroyedContexts=0) then
++      raise Exception.Create('Shared model diagnostic counters did not drain');
++    Writeln('PASS shared-model context counters drained');
++{$endif}
 +{$else}
 +    RunNative;
++    AwaitNativeRelease;
 +{$endif}
 +  except
 +    on E: Exception do

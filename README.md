@@ -74,3 +74,14 @@ native compile/link/construction/imports and package/models were NOT RUN.
 No native TLS connection occurred. Only the single newly authorized dispatch
 was made; no automatic or manual retry followed this failure. Text evidence
 was retained for each architecture. Existing Windows evidence remains unchanged.
+
+## Round 3: Darwin compiler and Blocks evidence
+
+Run37336482398, commit f776a35, passed official native bootstrap hello, the
+branch compiler cycle/RTL and all tblock1/tblock2/tblock2a compile/run checks on
+both x86_64 and arm64. Native compilation then failed at Assigned(cblock),
+which this compiler attempts to convert to TMethod. The required non-null
+Apple verification completion is now called directly inside its exception
+boundary. Native construction, imports, package/models and real TLS were not
+reached. The owner subsequently approved continued diagnosed rounds up to a
+conservative total20, including both prior runs/attempts.

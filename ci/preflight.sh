@@ -45,7 +45,7 @@ test -x "$compiler"
 test "$("$compiler" -iV)" = 3.3.1
 unit_root="$source_dir/rtl/units/$cpu-darwin"
 test -f "$unit_root/system.ppu"
-options=(-n -gl -dFPC_NETWORK_FRAMEWORK_NATIVE "-XR$sdk" "-WM$minimum" "-FD$tools_dir" "-Fu$unit_root"
+options=(-n -gl -dFPC_NETWORK_FRAMEWORK_NATIVE -dFPC_NETWORKFRAMEWORK_DIAGNOSTICS "-XR$sdk" "-WM$minimum" "-FD$tools_dir" "-Fu$unit_root"
   "-Fu$source_dir/packages/fcl-net/src" "-Fu$source_dir/packages/fcl-tls/src"
   "-Fu$source_dir/packages/fcl-web/src/base" "-Fu$source_dir/packages/fcl-base/src"
   "-Fu$source_dir/packages/rtl-objpas/src/inc" "-Fu$source_dir/packages/rtl-extra/src/unix"

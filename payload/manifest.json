@@ -2,7 +2,7 @@
   "base_repository": "https://gitlab.com/ACTom/source",
   "base_commit": "56900cd3a58b32cf3c0f8a3b48443a139bab8e0d",
   "source_branch": "feature/native-tls-smart-sockets",
-  "patch_sha256": "ee74532d478f7e15205d06b640aa30e4c67a26873599aa5508e80f04427c23d6",
+  "patch_sha256": "deb3f74e41486bcb037c52e6cb0409988ef21171db251f85b1c549c4aafd721a",
   "scope": "Windows Schannel/selector plus pure Pascal Network.framework prototype and HTTP factory; Darwin compile/runtime pending",
   "windows_validation": {
     "package_build_exit": 0,
@@ -47,7 +47,7 @@
     "native_tls_runtime": "not run",
     "historical_only": "This earlier C-only run does not validate the current pure Pascal payload"
   },
-  "next_ci_scope": "Another run requires new approval; corrected lipo preflight is prepared, not dispatched",
+  "next_ci_scope": "Within owner-authorized total 20 rounds; two standard macOS runners, each <=30min; diagnosis before repeat",
   "pure_pascal_preflight": {
     "run_id": 37332944563,
     "tested_carrier_commit": "a870a1e2793b886660557e9572489478ef6b6ec5",
@@ -77,5 +77,10 @@
     ],
     "fix": "lipo input path before -verify_arch; shell syntax checked, no macOS retry",
     "authorized_dispatches": 1
+  },
+  "ci_limit": {
+    "counting": "unique workflow ID summed run_attempt, matrix once",
+    "maximum": 20,
+    "owner_authorized": true
   }
 }
