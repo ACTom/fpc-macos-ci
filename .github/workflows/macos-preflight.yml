@@ -1,6 +1,16 @@
 name: FPC macOS native TLS preflight
 on:
   workflow_dispatch:
+    inputs:
+      official_bootstrap:
+        description: 'Owner-approved official FPC3.2.2 temporary bootstrap'
+        required: true
+        type: boolean
+        default: false
+      expected_commit:
+        description: 'Exact reviewed carrier commit to check out'
+        required: true
+        type: string
 permissions:
   contents: read
 concurrency:
@@ -11,6 +21,8 @@ jobs:
     name: macOS ${{ matrix.arch }} pure Pascal build and construction
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
+    env:
+      EXPECTED_CARRIER_COMMIT: ${{ inputs.expected_commit }}
     strategy:
       fail-fast: false
       matrix:
@@ -23,11 +35,14 @@ jobs:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
           fetch-depth: 1
+          ref: ${{ inputs.expected_commit }}
           persist-credentials: false
       - name: Verify fixed payload and apply against its FPC baseline
         shell: bash
         run: |
           set -euo pipefail
+          [[ "$EXPECTED_CARRIER_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_CARRIER_COMMIT"
           python3 ci/verify_payload.py
           base="$(python3 -c 'import json; print(json.load(open("payload/manifest.json"))["base_commit"])')"
           mkdir -p "$RUNNER_TEMP/fpc-source"
@@ -38,15 +53,34 @@ jobs:
           cd "$RUNNER_TEMP/fpc-source"
           git apply --check "$GITHUB_WORKSPACE/payload/native-tls.patch"
           git apply "$GITHUB_WORKSPACE/payload/native-tls.patch"
+      - name: Provision owner-approved official temporary bootstrap and test hello
+        if: inputs.official_bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash "$GITHUB_WORKSPACE/ci/bootstrap.sh" '${{ matrix.arch }}' 2>&1 | tee "$RUNNER_TEMP/bootstrap.log"
       - name: Build and construct the pure Pascal Network.framework prototype
         shell: bash
         run: |
           set -euo pipefail
           bash "$GITHUB_WORKSPACE/ci/preflight.sh" "$RUNNER_TEMP/fpc-source" \
             "$RUNNER_TEMP/fpc-macos-preflight" '${{ matrix.arch }}' 2>&1 | tee "$RUNNER_TEMP/preflight.log"
+      - name: Preserve per-architecture text evidence
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: pure-pascal-preflight-${{ matrix.arch }}
+          retention-days: 7
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/bootstrap.log
+            ${{ runner.temp }}/preflight.log
+            ${{ runner.temp }}/fpc-official-bootstrap/logs/*.txt
+            ${{ runner.temp }}/fpc-macos-preflight/*.log
+            ${{ runner.temp }}/fpc-macos-preflight/*.txt
       - name: Summarize scope
         if: always()
         shell: bash
         run: |
           printf '%s\n' 'This run requires an existing approved Darwin FPC bootstrap and checks pure Pascal compilation/linking, models and native construction.' \
-            'No software provisioning is performed. Absence of FPC is NOT RUN/failure. Native HTTPS/trust/hostname/lifetime acceptance remains separate.' >> "$GITHUB_STEP_SUMMARY"
+            'Official temporary bootstrap is opt-in with owner approval. Native HTTPS/trust/hostname/lifetime acceptance remains separate.' >> "$GITHUB_STEP_SUMMARY"

@@ -6,6 +6,17 @@ expected_arch="${3:?Pass x86_64 or arm64}"
 test "$(uname -s)" = Darwin
 test "$(uname -m)" = "$expected_arch"
 mkdir -p "$output_dir"
+stage() {
+  local name="$1"; shift
+  echo "STAGE $name RUN"
+  if "$@" 2>&1 | tee "$output_dir/$name.log"; then
+    echo "STAGE $name PASS"
+  else
+    local result="$?"
+    echo "STAGE $name FAIL exit=$result"
+    return "$result"
+  fi
+}
 sw_vers
 sdk="$(xcrun --sdk macosx --show-sdk-path)"
 xcrun clang --version
@@ -20,28 +31,38 @@ fi
 test "$("$bootstrap" -iTO)" = darwin
 test "$("$bootstrap" -iTP)" = "$cpu"
 "$bootstrap" -iV
-bootstrap_opt="-XR$sdk"
+bootstrap_opt="-XR$sdk -WM$minimum"
 if [[ -n "${FPC_BOOTSTRAP_UNITS:-}" ]]; then
   test -f "$FPC_BOOTSTRAP_UNITS/system.ppu"
-  bootstrap_opt="-n -Fu$FPC_BOOTSTRAP_UNITS -XR$sdk"
+  bootstrap_opt="-n -Fu$FPC_BOOTSTRAP_UNITS -XR$sdk -WM$minimum"
 fi
+tools_dir="$(dirname "$(xcrun --sdk macosx --find ld)")"
+bootstrap_opt="$bootstrap_opt -FD$tools_dir"
 # Fresh temporary source tree only. The compiler cycle builds its matching RTL.
-make -C "$source_dir/compiler" cycle -j4 "FPC=$bootstrap" "OPT=$bootstrap_opt" "OPTNEW=-XR$sdk -WM$minimum"
+stage compiler-cycle make -C "$source_dir/compiler" cycle -j4 "FPC=$bootstrap" "OPT=$bootstrap_opt" "OPTNEW=-XR$sdk -WM$minimum -FD$tools_dir"
 compiler="$source_dir/compiler/$compiler_name"
 test -x "$compiler"
 test "$("$compiler" -iV)" = 3.3.1
 unit_root="$source_dir/rtl/units/$cpu-darwin"
 test -f "$unit_root/system.ppu"
-options=(-n -gl -dFPC_NETWORK_FRAMEWORK_NATIVE "-XR$sdk" "-WM$minimum" "-Fu$unit_root"
+options=(-n -gl -dFPC_NETWORK_FRAMEWORK_NATIVE "-XR$sdk" "-WM$minimum" "-FD$tools_dir" "-Fu$unit_root"
   "-Fu$source_dir/packages/fcl-net/src" "-Fu$source_dir/packages/fcl-tls/src"
   "-Fu$source_dir/packages/fcl-web/src/base" "-Fu$source_dir/packages/fcl-base/src"
   "-Fu$source_dir/packages/rtl-objpas/src/inc" "-Fu$source_dir/packages/rtl-extra/src/unix"
   "-Fu$source_dir/packages/openssl/src" "-Fu$source_dir/packages/gnutls/src"
   "-Fi$source_dir/packages/fcl-net/src/unix" "-Fi$source_dir/packages/rtl-extra/src/inc"
   "-FU$output_dir" "-FE$output_dir")
+# The branch's own global/object-method Blocks ABI checks.
+for program in tblock1 tblock2 tblock2a; do
+  mkdir "$output_dir/$program"
+  stage "blocks-$program-compile" "$compiler" -n "-Fu$unit_root" "-XR$sdk" "-WM$minimum" "-FD$tools_dir" \
+    "-FU$output_dir/$program" "-FE$output_dir/$program" "$source_dir/tests/test/$program.pp"
+  stage "blocks-$program-run" "$output_dir/$program/$program"
+done
 # Establish the native compiler/Blocks/link boundary before building FCL packages.
-"$compiler" "${options[@]}" "$source_dir/packages/fcl-tls/tests/macos/testnetworknative.pp"
-"$output_dir/testnetworknative"
+stage native-compile "$compiler" "${options[@]}" "$source_dir/packages/fcl-tls/tests/macos/testnetworknative.pp"
+stage native-construction "$output_dir/testnetworknative"
+echo "STAGE native-imports RUN"
 otool -L "$output_dir/testnetworknative" | tee "$output_dir/native-imports.txt"
 nm -u "$output_dir/testnetworknative" | tee "$output_dir/native-symbols.txt"
 otool -l "$output_dir/testnetworknative" > "$output_dir/native-load-commands.txt"
@@ -66,10 +87,11 @@ assert all(version(value)<=version(sys.argv[3]) for value in versions), 'Linker 
 print('PASS no strong Network/Security or third-party TLS imports; minimum deployment',versions)
 print('Blocks imports and old-system runtime still require review/real execution')
 PY
-make -C "$source_dir/packages" all -j4 "FPC=$compiler" "FPMAKEOPT=-T 4 -sap -o '-XR$sdk -dFPC_NETWORK_FRAMEWORK_NATIVE'" "OPT=-XR$sdk"
+echo "STAGE native-imports PASS"
+stage packages make -C "$source_dir/packages" all -j4 "FPC=$compiler" "FPMAKEOPT=-T 4 -sap -o '-XR$sdk -dFPC_NETWORK_FRAMEWORK_NATIVE'" "OPT=-XR$sdk"
 for program in testpolicy testfactory testnetworkstream testhttpconnection testnetworkhandler testsmart; do
-  "$compiler" "${options[@]}" "$source_dir/packages/fcl-tls/tests/$program.pp"
+  stage "$program-compile" "$compiler" "${options[@]}" "$source_dir/packages/fcl-tls/tests/$program.pp"
 done
-for program in testpolicy testfactory testnetworkstream testhttpconnection testnetworkhandler; do "$output_dir/$program"; done
-"$output_dir/testsmart" race
+for program in testpolicy testfactory testnetworkstream testhttpconnection testnetworkhandler; do stage "$program-run" "$output_dir/$program"; done
+stage native-selector-race "$output_dir/testsmart" race
 echo 'PASS pure Pascal build/model/native construction; no native TCP/TLS acceptance or lifetime claim'

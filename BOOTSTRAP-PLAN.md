@@ -1,9 +1,9 @@
 # Proposed official Darwin bootstrap and one bounded run
 
-Prepared for owner review. No bootstrap binary has been downloaded, extracted,
-installed or executed, and no additional workflow has been dispatched.
+The owner approved this exact temporary bootstrap and one additional manual
+run. Before dispatch, no bootstrap binary has been downloaded/executed locally.
 
-Approval requested: download/extract/run the official FPC 3.2.2 bootstrap only
+Approved scope: download/extract/run the official FPC 3.2.2 bootstrap only
 inside the ephemeral runner's RUNNER_TEMP, then one manual workflow dispatch on
 the existing macos-15-intel and macos-15 standard runners, at most 30 minutes
 per job. There are no automatic reruns. This first stage covers compiler/RTL,
@@ -61,9 +61,9 @@ OS policy. The package has not yet been inventoried, so those paths are not
 claimed to be known.
 
 Export FPC_BOOTSTRAP_COMPILER and FPC_BOOTSTRAP_UNITS for ci/preflight.sh. The
-current script already accepts these inputs. Adding the explicitly gated
-temporary extraction step is the next implementation after approval; absent
-bootstrap currently returns NOT RUN/exit77. No installer is in this repository.
+current script already accepts these inputs. The explicitly gated ci/bootstrap.sh now implements temporary extraction and
+a native hello test; absent bootstrap still returns NOT RUN/exit77. No installer
+is executed. The workflow also records the branch's own global/method Blocks tests.
 
 ## Build and evidence
 
