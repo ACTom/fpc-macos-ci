@@ -1119,10 +1119,10 @@ index 0000000000..1e5a2a4308
 +[test carrier](https://github.com/ACTom/fpc-macos-ci). No further CI was started.
 diff --git a/packages/fcl-tls/docs/macos-transport.md b/packages/fcl-tls/docs/macos-transport.md
 new file mode 100644
-index 0000000000..4ffe4ee3be
+index 0000000000..664f2426b5
 --- /dev/null
 +++ b/packages/fcl-tls/docs/macos-transport.md
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,153 @@
 +# Pure Pascal Network.framework client prototype
 +
 +The connection layer, SSL handler and fphttpclient connection factory are now
@@ -1252,6 +1252,30 @@ index 0000000000..4ffe4ee3be
 +- [Apple Security protocol headers](https://github.com/apple-oss-distributions/Security/blob/main/protocol/SecProtocolOptions.h)
 +- [Apple libdispatch data contract](https://github.com/apple-oss-distributions/libdispatch/blob/main/dispatch/data.h)
 +- [Clang Blocks ABI](https://clang.llvm.org/docs/Block-ABI-Apple.html)
++
++## Official bootstrap preflight outcome
++
++[Run 37332944563](https://github.com/ACTom/fpc-macos-ci/actions/runs/37332944563)
++tested carrier a870a1e2793b886660557e9572489478ef6b6ec5, patch digest
++fbb3f5b5cac2fe3ced1938474a2d7a759ef610d4d4478031a7e8171a6b62e17a.
++Both standard runners finished with failure on macOS15.7.9 / Xcode16.4.
++Fixed-base patch application, official DMG download, hdiutil image verification
++and pkgutil extraction passed. Both observed the same DMG SHA256:
++05d4510c8c887e3c68de20272abf62171aa5b2ef1eba6bce25e4c0bc41ba8b7d.
++This is the observed digest, not independent publisher-signature evidence.
++The image contains an mpkg wrapper with one nested flat pkg; that payload was
++extracted without installer scripts. Native compiler and matching RTL paths
++were found on both architectures. No compiler was installed globally.
++
++The bootstrap script incorrectly passed `lipo -verify_arch <arch> <file>`;
++lipo treated the trailing filename as another architecture and exited 1.
++The correction is `lipo <file> -verify_arch <arch>`, following the actual tool's
++usage. It is prepared and shell syntax checked, not revalidated on macOS.
++Version/target queries, bootstrap hello, compiler cycle/RTL, branch Blocks,
++native compile/link/construction/imports and package/models were NOT RUN.
++No native TLS connection occurred. Only the single newly authorized dispatch
++was made; no automatic or manual retry followed this failure. Text evidence
++was retained for each architecture. Existing Windows evidence remains unchanged.
 diff --git a/packages/fcl-tls/docs/openssl-eof.md b/packages/fcl-tls/docs/openssl-eof.md
 new file mode 100644
 index 0000000000..475c795980
@@ -1349,10 +1373,10 @@ index 0000000000..475c795980
 +- [OpenSSL s_client diagnostics](https://docs.openssl.org/3.5/man1/openssl-s_client/)
 diff --git a/packages/fcl-tls/docs/validation.md b/packages/fcl-tls/docs/validation.md
 new file mode 100644
-index 0000000000..e47f2e02ed
+index 0000000000..8712f7b706
 --- /dev/null
 +++ b/packages/fcl-tls/docs/validation.md
-@@ -0,0 +1,258 @@
+@@ -0,0 +1,282 @@
 +# Windows increment validation
 +
 +Recorded on 2026-10-05 against base commit
@@ -1611,6 +1635,30 @@ index 0000000000..e47f2e02ed
 +then failed its C harness warning. Neither runner had FPC. It does not test the
 +new pure Pascal code. No second manual run or bootstrap provisioning has happened.
 +All CI scripts/workflows remain outside the FPC source patch in ACTom/fpc-macos-ci.
++
++## Official bootstrap preflight outcome
++
++[Run 37332944563](https://github.com/ACTom/fpc-macos-ci/actions/runs/37332944563)
++tested carrier a870a1e2793b886660557e9572489478ef6b6ec5, patch digest
++fbb3f5b5cac2fe3ced1938474a2d7a759ef610d4d4478031a7e8171a6b62e17a.
++Both standard runners finished with failure on macOS15.7.9 / Xcode16.4.
++Fixed-base patch application, official DMG download, hdiutil image verification
++and pkgutil extraction passed. Both observed the same DMG SHA256:
++05d4510c8c887e3c68de20272abf62171aa5b2ef1eba6bce25e4c0bc41ba8b7d.
++This is the observed digest, not independent publisher-signature evidence.
++The image contains an mpkg wrapper with one nested flat pkg; that payload was
++extracted without installer scripts. Native compiler and matching RTL paths
++were found on both architectures. No compiler was installed globally.
++
++The bootstrap script incorrectly passed `lipo -verify_arch <arch> <file>`;
++lipo treated the trailing filename as another architecture and exited 1.
++The correction is `lipo <file> -verify_arch <arch>`, following the actual tool's
++usage. It is prepared and shell syntax checked, not revalidated on macOS.
++Version/target queries, bootstrap hello, compiler cycle/RTL, branch Blocks,
++native compile/link/construction/imports and package/models were NOT RUN.
++No native TLS connection occurred. Only the single newly authorized dispatch
++was made; no automatic or manual retry followed this failure. Text evidence
++was retained for each architecture. Existing Windows evidence remains unchanged.
 diff --git a/packages/fcl-tls/fpmake.pp b/packages/fcl-tls/fpmake.pp
 new file mode 100644
 index 0000000000..37e9fb5bf9

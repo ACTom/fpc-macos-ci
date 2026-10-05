@@ -69,16 +69,18 @@ for target,value in [(sys.argv[4],compilers[0]),(sys.argv[5],units[0].parent)]:
     assert '\n' not in str(value)
     Path(target).write_text(str(value)+'\n')
 PY
+echo 'STAGE official-bootstrap-extract PASS'
+echo 'STAGE official-bootstrap-identity RUN'
 bootstrap="$(cat "$work/compiler-path.txt")"
 units="$(cat "$work/rtl-path.txt")"
 test -x "$bootstrap"
 file "$bootstrap"
-lipo -verify_arch "$expected_arch" "$bootstrap"
+lipo "$bootstrap" -verify_arch "$expected_arch"
 otool -L "$bootstrap"
 test "$("$bootstrap" -n -iV)" = 3.2.2
 test "$("$bootstrap" -n -iTP)" = "$cpu"
 test "$("$bootstrap" -n -iTO)" = darwin
-echo 'STAGE official-bootstrap-extract PASS'
+echo 'STAGE official-bootstrap-identity PASS'
 echo 'STAGE official-bootstrap-hello RUN'
 cat > "$work/hello/boothello.pp" <<'PASCAL'
 program boothello;

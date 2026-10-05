@@ -50,3 +50,27 @@ truncation failure also remains recorded, not counted as certificate rejection.
 
 Updates are pushed through the owner's configured SSH key. Source repository
 origin, account settings and key configuration are not changed.
+
+## Official bootstrap preflight outcome
+
+[Run 37332944563](https://github.com/ACTom/fpc-macos-ci/actions/runs/37332944563)
+tested carrier a870a1e2793b886660557e9572489478ef6b6ec5, patch digest
+fbb3f5b5cac2fe3ced1938474a2d7a759ef610d4d4478031a7e8171a6b62e17a.
+Both standard runners finished with failure on macOS15.7.9 / Xcode16.4.
+Fixed-base patch application, official DMG download, hdiutil image verification
+and pkgutil extraction passed. Both observed the same DMG SHA256:
+05d4510c8c887e3c68de20272abf62171aa5b2ef1eba6bce25e4c0bc41ba8b7d.
+This is the observed digest, not independent publisher-signature evidence.
+The image contains an mpkg wrapper with one nested flat pkg; that payload was
+extracted without installer scripts. Native compiler and matching RTL paths
+were found on both architectures. No compiler was installed globally.
+
+The bootstrap script incorrectly passed `lipo -verify_arch <arch> <file>`;
+lipo treated the trailing filename as another architecture and exited 1.
+The correction is `lipo <file> -verify_arch <arch>`, following the actual tool's
+usage. It is prepared and shell syntax checked, not revalidated on macOS.
+Version/target queries, bootstrap hello, compiler cycle/RTL, branch Blocks,
+native compile/link/construction/imports and package/models were NOT RUN.
+No native TLS connection occurred. Only the single newly authorized dispatch
+was made; no automatic or manual retry followed this failure. Text evidence
+was retained for each architecture. Existing Windows evidence remains unchanged.
