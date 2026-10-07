@@ -1,27 +1,36 @@
 from pathlib import Path
-import hashlib, json, re
+import hashlib,json,re
 root=Path(__file__).resolve().parent.parent
-manifest=json.loads((root/'payload/manifest.json').read_text())
-assert manifest['base_repository']=='https://gitlab.com/freepascal.org/fpc/source'
-assert re.fullmatch('[0-9a-f]{40}',manifest['base_commit'])
-patch=(root/'payload/native-tls.patch').read_bytes()
-assert hashlib.sha256(patch).hexdigest()==manifest['patch_sha256'], 'Patch digest mismatch'
-for name in ['networkframeworkapi.pp','networkframeworknative.pp','networkframeworksslsockets.pp']:
-    assert ('diff --git a/packages/fcl-net/src/'+name).encode() in patch
-for name in ['networkframeworkbridge.c','networkframeworkbridge.h','networkframework-api.c','testnetworkbridge.c']:
-    assert ('diff --git a/packages/fcl-net/src/macos/'+name).encode() not in patch
-    assert ('diff --git a/packages/fcl-tls/tests/macos/'+name).encode() not in patch
-for path in ['packages/fcl-tls/ci/','packages/fcl-tls/tests/macos/preflight.sh','.github/workflows/']:
-    assert ('diff --git a/'+path).encode() not in patch, 'CI orchestration leaked into FPC patch'
-print('PASS fixed pure Pascal payload',manifest['base_commit'],manifest['patch_sha256'])
-
-allowed_existing={'packages/fcl-net/fpmake.pp','packages/fcl-net/namespaces.lst',
-                  'packages/fcl-net/src/sslsockets.pp','packages/fcl-web/src/base/fphttpclient.pp'}
-for section in patch.decode().split('diff --git ')[1:]:
-    name=section.splitlines()[0].split(' b/',1)[1]
-    if 'new file mode' not in section.split('@@',1)[0]:
-        assert name in allowed_existing, 'Unrelated original file changed: '+name
-for marker in ['smartsslsockets','tlsbackendpolicy','RequireAuthenticatedTLSClosure',
-               'CreateClientConnection','SupportsAuthenticatedEOF']:
-    assert marker.encode() not in patch, 'Prototype scope leaked: '+marker
-print('PASS four-original-file minimal scope; no smart/strict EOF/legacy backend edits')
+m=json.loads((root/'payload/manifest.json').read_text())
+assert m['base_repository']=='https://gitlab.com/freepascal.org/fpc/source'
+assert re.fullmatch('[0-9a-f]{40}',m['base_commit'])
+combined=(root/'payload/native-tls.patch').read_bytes()
+smart=(root/'payload/smart-tls.patch').read_bytes()
+assert hashlib.sha256(combined).hexdigest()==m['patch_sha256']
+assert hashlib.sha256(smart).hexdigest()==m['smart_patch_sha256']
+original_native={'packages/fcl-net/fpmake.pp','packages/fcl-net/namespaces.lst',
+ 'packages/fcl-net/src/sslsockets.pp','packages/fcl-web/src/base/fphttpclient.pp'}
+original_smart={'packages/fpmake_add.inc','packages/fpmake_proc.inc',
+ 'packages/openssl/src/openssl.pas','packages/gnutls/src/gnutls.pp','packages/gnutls/src/gnutlssockets.pp'}
+def inspect(patch,allowed_original,expected):
+ names=[]
+ for section in patch.decode().split('diff --git ')[1:]:
+  name=section.splitlines()[0].split(' b/',1)[1]
+  names.append(name)
+  if 'new file mode' not in section.split('@@',1)[0]:
+   assert name in allowed_original, 'Unrelated original file changed: '+name
+ assert set(names)==expected and len(names)==len(expected), 'Unexpected file set'
+inspect(smart,original_smart,{e['path'] for e in m['files']})
+inspect(combined,original_native|original_smart,{e['path'] for e in m['canonical_files']})
+assert len(m['files'])==21 and len(m['prerequisite_files'])==30
+assert set(m['original_files_in_smart_diff'])==original_smart
+for name in ['networkframeworkapi.pp','networkframeworknative.pp','networkframeworksslsockets.pp','schannelsslsockets.pp']:
+ assert ('diff --git a/packages/fcl-net/src/'+name).encode() in combined
+for prefix in ['.github/','packages/fcl-tls/ci/','packages/fcl-net/src/macos/']:
+ assert ('diff --git a/'+prefix).encode() not in combined
+for marker in ['CreateClientConnection','RequireAuthenticatedTLSClosure','SupportsAuthenticatedEOF','ClaimSSLInterface','ClaimGnuTLS']:
+ assert marker.encode() not in combined, 'Full experiment marker leaked: '+marker
+assert 'SetDefaultHandlerClass(HandlerClass)' in smart.decode()
+assert 'InitSSLInterfaceIfUnloaded' in smart.decode() and 'LoadGnuTLSIfUnloaded' in smart.decode()
+print('PASS fixed native-prerequisite + minimal smart payload',m['base_commit'],m['patch_sha256'])
+print('PASS independent smart delta: 21 files, five existing loader/package files, no further HTTP/socket core change')

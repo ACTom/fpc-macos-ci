@@ -1,4 +1,4 @@
-name: FPC macOS native TLS preflight
+name: FPC macOS native and smart TLS preflight
 on:
   workflow_dispatch:
     inputs:
@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   preflight:
-    name: macOS ${{ matrix.arch }} pure Pascal build and construction
+    name: macOS ${{ matrix.arch }} native and smart TLS
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 30
     env:
@@ -53,13 +53,14 @@ jobs:
           cd "$RUNNER_TEMP/fpc-source"
           git apply --check "$GITHUB_WORKSPACE/payload/native-tls.patch"
           git apply "$GITHUB_WORKSPACE/payload/native-tls.patch"
+          python3 "$GITHUB_WORKSPACE/ci/verify_applied.py" "$RUNNER_TEMP/fpc-source"
       - name: Provision owner-approved official temporary bootstrap and test hello
         if: inputs.official_bootstrap
         shell: bash
         run: |
           set -euo pipefail
           bash "$GITHUB_WORKSPACE/ci/bootstrap.sh" '${{ matrix.arch }}' 2>&1 | tee "$RUNNER_TEMP/bootstrap.log"
-      - name: Build and construct the pure Pascal Network.framework prototype
+      - name: Build and test native prerequisites and explicit smart selection
         shell: bash
         run: |
           set -euo pipefail
@@ -79,6 +80,8 @@ jobs:
             ${{ runner.temp }}/fpc-macos-preflight/*.log
             ${{ runner.temp }}/fpc-macos-preflight/*.txt
             ${{ runner.temp }}/fpc-macos-preflight/tls-fixtures/results.json
+            ${{ runner.temp }}/fpc-macos-preflight/selector-fixtures/results.json
+            ${{ runner.temp }}/fpc-macos-preflight/selector-fixtures/mock-libraries/**/*.log
       - name: Summarize scope
         if: always()
         shell: bash

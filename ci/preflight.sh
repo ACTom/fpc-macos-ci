@@ -118,5 +118,17 @@ for program in testnetworkhttp testnetworkpeer; do
   stage "$program-compile" "$compiler" "${options[@]}" "$source_dir/packages/fcl-net/tests/networkframework/$program.pp"
 done
 stage public-peer-construction "$output_dir/testnetworkpeer"
-stage native-tls-acceptance python3 "$source_dir/packages/fcl-net/tests/networkframework/testnetworktls.py" "$output_dir/testnetworknative" "$output_dir/testnetworkhttp" "$output_dir/tls-fixtures" --peer "$output_dir/testnetworkpeer"
-echo 'PASS minimal peer build/HTTP contract/native TLS acceptance; see every result and counter'
+options+=("-Fu$source_dir/packages/fcl-tls/src" "-Fu$source_dir/packages/openssl/src" "-Fu$source_dir/packages/gnutls/src")
+for unit_dir in "$source_dir"/packages/*/units/"$cpu-darwin"; do
+  if test -d "$unit_dir"; then options+=("-Fu$unit_dir"); fi
+done
+for program in testsmartselection testsmartnetworkhttp; do
+  stage "$program-compile" "$compiler" "${options[@]}" "$source_dir/packages/fcl-tls/tests/$program.pp"
+done
+stage smart-selector python3 "$source_dir/packages/fcl-tls/tests/testsmartmatrix.py" --source "$source_dir" \
+  --program "$output_dir/testsmartselection" --compiler "$compiler" --rtl "$unit_root" \
+  --output "$output_dir/selector-fixtures"
+otool -L "$output_dir/testsmartnetworkhttp" > "$output_dir/smart-imports.txt"
+stage smart-imports python3 "$GITHUB_WORKSPACE/ci/check_smart_imports.py" "$output_dir/smart-imports.txt"
+stage smart-native-tls-acceptance python3 "$source_dir/packages/fcl-net/tests/networkframework/testnetworktls.py" "$output_dir/testnetworknative" "$output_dir/testsmartnetworkhttp" "$output_dir/tls-fixtures" --peer "$output_dir/testnetworkpeer"
+echo 'PASS native prerequisites, smart selection and real native TLS; see every result and counter'
