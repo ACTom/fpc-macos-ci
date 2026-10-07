@@ -37,6 +37,15 @@ synchronizes the fixture on a flushed client-native-ready marker. Only two test
 files change; no result or expectation is weakened. The original run8 results
 remain retained. Usage is8/20 before any next dispatch.
 
+Run9, carrier d89e3de88be2f996cbd0f188d5a9f03c6a71b46c, preserves all assertions.
+Intel passed72/72. ARM passed69/72: every local/reset/public-peer case passed;
+example.com True/False and wrong.host.badssl True hit POSIX60 Connect timeout.
+These are failed acceptance rows, not certificate-validation evidence. Run8
+had passed the same public controls with identical production code. The next
+fixture adds DNS and existing system curl IPv4/IPv6 diagnostics only after a
+native public failure; it does not retry or reclassify that native result.
+Usage is9/20 before any next dispatch.
+
 ## Recorded runs
 
 | Workflow | Both-architecture outcome |

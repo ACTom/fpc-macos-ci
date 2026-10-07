@@ -3021,10 +3021,10 @@ index 00000000..b603157a
 +end.
 diff --git a/packages/fcl-net/tests/networkframework/testnetworktls.py b/packages/fcl-net/tests/networkframework/testnetworktls.py
 new file mode 100644
-index 00000000..d916e40b
+index 00000000..91dc30d3
 --- /dev/null
 +++ b/packages/fcl-net/tests/networkframework/testnetworktls.py
-@@ -0,0 +1,268 @@
+@@ -0,0 +1,292 @@
 +"""macOS native TLS acceptance, using existing Python ssl/OpenSSL only as servers.
 +
 +The Pascal clients load system Network/Security, never the fixture's TLS library.
@@ -3279,8 +3279,32 @@ index 00000000..d916e40b
 +    for host in ('example.com', 'wrong.host.badssl.com', 'expired.badssl.com', 'self-signed.badssl.com', 'untrusted-root.badssl.com'):
 +        for verify in ('true', 'false'):
 +            expected = 'pass' if host == 'example.com' or verify == 'false' else 'certificate'
-+            execute('public-'+host+'-'+verify, [args.http, f'https://{host}/', verify, 'true', 'false', expected,
-+                                               1 if expected == 'pass' else 0, 'public', 1])
++            row = execute('public-'+host+'-'+verify, [args.http, f'https://{host}/', verify, 'true', 'false', expected,
++                                                     1 if expected == 'pass' else 0, 'public', 1])
++            if row['returncode'] != 0:
++                # A reference probe diagnoses a failing runner; it never changes
++                # native acceptance, retries that client, or counts validation.
++                controls = {}
++                try:
++                    controls['addresses'] = sorted({item[4][0] for item in
++                        socket.getaddrinfo(host, 443, type=socket.SOCK_STREAM)})
++                except OSError as exc:
++                    controls['dns_error'] = str(exc)
++                curl = Path('/usr/bin/curl')
++                if curl.is_file():
++                    for flag in ('-4', '-6'):
++                        try:
++                            control = subprocess.run([str(curl), flag, '--head', '--silent',
++                                '--show-error', '--noproxy', '*', '--connect-timeout', '5',
++                                '--max-time', '8', f'https://{host}/'], capture_output=True,
++                                text=True, timeout=10)
++                            controls[flag] = {'exit': control.returncode,
++                                             'stdout': control.stdout, 'stderr': control.stderr}
++                        except subprocess.TimeoutExpired as exc:
++                            controls[flag] = {'timeout': str(exc)}
++                row['public_network_diagnostics'] = controls
++                print('PUBLIC FAILURE DIAGNOSTIC', row['case'], json.dumps(controls), flush=True)
++                save()
 +    save()
 +    failures = [row['case'] for row in results if row.get('returncode') != 0]
 +    acceptance = [row for row in results if not row.get('diagnostic_only')]
