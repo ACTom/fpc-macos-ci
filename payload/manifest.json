@@ -3,9 +3,9 @@
   "base_commit": "2ec3f7a440e3c7b80cba4f7d2a7814c7bb36947b",
   "source_branch": "feature/smart-native-tls-minimal",
   "prerequisite_tree": "c03c9acf269ba46a4dfe540cb28a9dda44fecc6c",
-  "final_tree": "4bf34fa28b4afb5d14a90d29ca9d066a84fe0061",
-  "smart_patch_sha256": "2ba61f8cbf593938bfd40a2667886cd076c0f48b98b464a58a2d9ed568cc9a81",
-  "patch_sha256": "abaedc1bccb595b57a78dccd65db96c0e2d771e3830784049185f78855d51431",
+  "final_tree": "4365c12c9bf48f55a43d1f47cd6473dc951faeb0",
+  "smart_patch_sha256": "ac666a51ac7e55cda702124ede2495081e3f3c7dbba6170e3879745a885778d7",
+  "patch_sha256": "ed8c63f077f9e8611e77fefacb90918a34aa9dbcf0e39a3f7d6a3b5777a621bf",
   "prerequisite_patch_sha256": "5ab147d3d284c82211b767749906f25d7be9e9963f729471dbff59524bf157bf",
   "prerequisite_patches": {
     "schannel-minimal.patch": "172620f1347eea28de733ab4be8eda5a81da981318dec560896d34bca12b18b6",
@@ -70,7 +70,7 @@
     },
     {
       "path": "packages/fcl-tls/tests/testsmartmatrix.py",
-      "sha256": "4fd1d88c227c5cd81dce41d383b76ba6597198751c097f9ad84339eda2316a80"
+      "sha256": "312339b7040127d277752a1580d1e9e99df0d588ccdb1caf59ad38a80569d735"
     },
     {
       "path": "packages/fcl-tls/tests/testsmartnative.pp",
@@ -289,7 +289,7 @@
       "path": "packages/fcl-tls/tests/testsmarthttp.pp"
     },
     {
-      "added": "228",
+      "added": "229",
       "deleted": "0",
       "path": "packages/fcl-tls/tests/testsmartmatrix.py"
     },
@@ -493,7 +493,7 @@
     },
     {
       "path": "packages/fcl-tls/tests/testsmartmatrix.py",
-      "sha256": "4fd1d88c227c5cd81dce41d383b76ba6597198751c097f9ad84339eda2316a80"
+      "sha256": "312339b7040127d277752a1580d1e9e99df0d588ccdb1caf59ad38a80569d735"
     },
     {
       "path": "packages/fcl-tls/tests/testsmartnative.pp",
@@ -540,7 +540,7 @@
       "sha256": "9fb65aa967d816b74fd87a62f1a737ba93aeb99f0a9d31e6c089100c19fb589f"
     }
   ],
-  "added": 2160,
+  "added": 2161,
   "deleted": 4,
   "smart_sequential_apply": "passed",
   "core_changes_in_smart": false,
@@ -577,7 +577,7 @@
     },
     "actual_openssl_version": "3.5.4 (0x30500040), Git-distributed runtime copied to isolated outputs",
     "real_gnutls": "NOT RUN: no real Windows runtime found; fake fixtures only prove selection/verification setup",
-    "macos": "Pending this run; Windows records do not prove macOS execution",
+    "macos": "Run11: Intel selector35/35, native+smart68/68 plus4EOF observations; ARM selector33/35, two fat-image mock loads failed, TLS stage NOT RUN. Final fixture alignment changed to16KiB, NOT RERUN.",
     "retained_prior_failures": [
       "OpenSSL first harness variable-name shadowing, interrupted after seven cases",
       "package invocation RTL metadata/path/global dotted option corrections"

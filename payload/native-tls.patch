@@ -6094,10 +6094,10 @@ index 00000000..a2fc380c
 +end.
 diff --git a/packages/fcl-tls/tests/testsmartmatrix.py b/packages/fcl-tls/tests/testsmartmatrix.py
 new file mode 100644
-index 00000000..d954f894
+index 00000000..2ee9f392
 --- /dev/null
 +++ b/packages/fcl-tls/tests/testsmartmatrix.py
-@@ -0,0 +1,228 @@
+@@ -0,0 +1,229 @@
 +#!/usr/bin/env python3
 +"""Fault-injection libraries test selection only; they never perform TLS.
 +
@@ -6295,10 +6295,11 @@ index 00000000..d954f894
 +        cputype, subtype = struct.unpack_from('<II', thin, 4)
 +        def fat_image(name, fat64=False, architecture=None, invalid_bounds=False):
 +            magic = 0xcafebabf if fat64 else 0xcafebabe
-+            offset = 4096
-+            size = len(thin) + (4096 if invalid_bounds else 0)
-+            entry = struct.pack('>IIQQII', architecture or cputype, subtype, offset, size, 12, 0) if fat64 else \
-+                    struct.pack('>IIIII', architecture or cputype, subtype, offset, size, 12)
++            # Keep slices aligned for both Intel 4 KiB and Apple Silicon 16 KiB pages.
++            offset = 16384
++            size = len(thin) + (16384 if invalid_bounds else 0)
++            entry = struct.pack('>IIQQII', architecture or cputype, subtype, offset, size, 14, 0) if fat64 else \
++                    struct.pack('>IIIII', architecture or cputype, subtype, offset, size, 14)
 +            header = struct.pack('>II', magic, 1) + entry
 +            path = built / name
 +            path.write_bytes(header + b'\0' * (offset-len(header)) + thin)
