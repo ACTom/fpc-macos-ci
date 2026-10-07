@@ -112,13 +112,24 @@ stage packages make -C "$source_dir/packages" all -j4 "FPC=$compiler" "FPMAKEOPT
 for unit_dir in "$source_dir"/packages/*/units/"$cpu-darwin"; do
   if test -d "$unit_dir"; then options+=("-Fu$unit_dir"); fi
 done
-options+=("-Fu$source_dir/packages/fcl-web/src/jwt" "-Fu$source_dir/packages/fcl-web/src/restbridge"
-  "-Fu$source_dir/packages/fcl-openapi/src" "-Fu$source_dir/packages/fcl-jsonschema/src")
-stage testfpweb-compile "$compiler" "${options[@]}" "$source_dir/packages/fcl-web/tests/testfpweb.lpr"
-stage http-peer-model "$output_dir/testfpweb" --suite=TTestClientPeers --format=plain
-stage http-protocol-regression "$output_dir/testfpweb" --suite=TTestHTTPEncode --format=plain
-stage testsocketpeer-compile "$compiler" "${options[@]}" "$source_dir/packages/fcl-web/tests/testsocketpeer.pp"
-stage real-socket-regression python3 "$GITHUB_WORKSPACE/ci/run_socket_test.py" "$output_dir/testsocketpeer"
+# Keep the existing runner on one matching set of package PPUs. Earlier native
+# pre-package compilation writes source-built RTL/FCL units to output_dir.
+runner_dir="$output_dir/http-runner-units"
+mkdir "$runner_dir"
+runner_options=(-n -gl "-XR$sdk" "-WM$minimum" "-FD$tools_dir" "-Fu$unit_root"
+  "-FU$runner_dir" "-FE$runner_dir")
+for unit_dir in "$source_dir"/packages/*/units/"$cpu-darwin"; do
+  if test -d "$unit_dir"; then runner_options+=("-Fu$unit_dir"); fi
+done
+# These extra source paths are declared in the existing testfpweb.lpi.
+runner_options+=("-Fu$source_dir/packages/fcl-web/src/base" "-Fu$source_dir/packages/fcl-web/src/jwt"
+  "-Fu$source_dir/packages/fcl-web/src/restbridge" "-Fu$source_dir/packages/fcl-openapi/src"
+  "-Fu$source_dir/packages/fcl-jsonschema/src" "-Fi$source_dir/packages/fcl-net/src/unix")
+stage testfpweb-compile "$compiler" "${runner_options[@]}" "$source_dir/packages/fcl-web/tests/testfpweb.lpr"
+stage http-peer-model "$runner_dir/testfpweb" --suite=TTestClientPeers --format=plain
+stage http-protocol-regression "$runner_dir/testfpweb" --suite=TTestHTTPEncode --format=plain
+stage testsocketpeer-compile "$compiler" "${runner_options[@]}" "$source_dir/packages/fcl-web/tests/testsocketpeer.pp"
+stage real-socket-regression python3 "$GITHUB_WORKSPACE/ci/run_socket_test.py" "$runner_dir/testsocketpeer"
 for program in testnetworkhttp testnetworkpeer; do
   stage "$program-compile" "$compiler" "${options[@]}" "$source_dir/packages/fcl-net/tests/$program.pp"
 done
