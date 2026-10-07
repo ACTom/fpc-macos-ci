@@ -69,7 +69,7 @@ options=(-n -gl -dFPC_NETWORKFRAMEWORK_DIAGNOSTICS "-XR$sdk" "-WM$minimum" "-FD$
   "-Fu$source_dir/packages/fcl-web/src/base" "-Fu$source_dir/packages/fcl-base/src"
   "-Fu$source_dir/packages/rtl-objpas/src/inc" "-Fu$source_dir/packages/rtl-extra/src/unix"
   "-Fu$source_dir/packages/rtl-extra/src/darwin" "-Fu$source_dir/packages/rtl-extra/src/bsd"
-  "-Fi$source_dir/packages/fcl-net/src/unix" "-Fi$source_dir/packages/fcl-net/tests/networkframework" "-Fi$source_dir/packages/rtl-extra/src/inc"
+  "-Fi$source_dir/packages/fcl-net/src/unix" "-Fi$source_dir/packages/fcl-net/tests" "-Fi$source_dir/packages/rtl-extra/src/inc"
   "-Fi$source_dir/packages/rtl-extra/src/bsd" "-Fi$source_dir/packages/rtl-extra/src/unix" "-Fi$source_dir/packages/rtl-extra/src/darwin"
   "-FU$output_dir" "-FE$output_dir")
 # The branch's own global/object-method Blocks ABI checks.
@@ -80,7 +80,7 @@ for program in tblock1 tblock2 tblock2a; do
   stage "blocks-$program-run" "$output_dir/$program/$program"
 done
 # Establish the native compiler/Blocks/link boundary before building FCL packages.
-stage native-compile "$compiler" "${options[@]}" "$source_dir/packages/fcl-net/tests/networkframework/testnetworknative.pp"
+stage native-compile "$compiler" "${options[@]}" "$source_dir/packages/fcl-net/tests/testnetworknative.pp"
 stage native-construction "$output_dir/testnetworknative"
 echo "STAGE native-imports RUN"
 otool -L "$output_dir/testnetworknative" | tee "$output_dir/native-imports.txt"
@@ -109,26 +109,28 @@ print('Blocks imports and old-system runtime still require review/real execution
 PY
 echo "STAGE native-imports PASS"
 stage packages make -C "$source_dir/packages" all -j4 "FPC=$compiler" "FPMAKEOPT=-T 4 -sap -o '-XR$sdk'" "OPT=-XR$sdk"
-for program in testclientpeer testsocketpeer; do
-  stage "$program-compile" "$compiler" "${options[@]}" "$source_dir/packages/fcl-web/tests/$program.pp"
-done
-stage http-peer-model "$output_dir/testclientpeer"
-stage real-socket-regression python3 "$GITHUB_WORKSPACE/ci/run_socket_test.py" "$output_dir/testsocketpeer"
-for program in testnetworkhttp testnetworkpeer; do
-  stage "$program-compile" "$compiler" "${options[@]}" "$source_dir/packages/fcl-net/tests/networkframework/$program.pp"
-done
-stage public-peer-construction "$output_dir/testnetworkpeer"
-options+=("-Fu$source_dir/packages/fcl-tls/src" "-Fu$source_dir/packages/openssl/src" "-Fu$source_dir/packages/gnutls/src")
 for unit_dir in "$source_dir"/packages/*/units/"$cpu-darwin"; do
   if test -d "$unit_dir"; then options+=("-Fu$unit_dir"); fi
 done
+options+=("-Fu$source_dir/packages/fcl-web/src/jwt" "-Fu$source_dir/packages/fcl-web/src/restbridge"
+  "-Fu$source_dir/packages/fcl-openapi/src" "-Fu$source_dir/packages/fcl-jsonschema/src")
+stage testfpweb-compile "$compiler" "${options[@]}" "$source_dir/packages/fcl-web/tests/testfpweb.lpr"
+stage http-peer-model "$output_dir/testfpweb" --suite=TTestClientPeers --format=plain
+stage http-protocol-regression "$output_dir/testfpweb" --suite=TTestHTTPEncode --format=plain
+stage testsocketpeer-compile "$compiler" "${options[@]}" "$source_dir/packages/fcl-web/tests/testsocketpeer.pp"
+stage real-socket-regression python3 "$GITHUB_WORKSPACE/ci/run_socket_test.py" "$output_dir/testsocketpeer"
+for program in testnetworkhttp testnetworkpeer; do
+  stage "$program-compile" "$compiler" "${options[@]}" "$source_dir/packages/fcl-net/tests/$program.pp"
+done
+stage public-peer-construction "$output_dir/testnetworkpeer"
+options+=("-Fu$source_dir/packages/fcl-tls/src" "-Fu$source_dir/packages/openssl/src" "-Fu$source_dir/packages/gnutls/src")
 for program in testsmartselection testsmartnetworkhttp; do
   stage "$program-compile" "$compiler" "${options[@]}" "$source_dir/packages/fcl-tls/tests/$program.pp"
 done
-stage smart-selector python3 "$source_dir/packages/fcl-tls/tests/testsmartmatrix.py" --source "$source_dir" \
+stage smart-selector python3 "$GITHUB_WORKSPACE/ci/testsmartmatrix.py" --source "$source_dir" \
   --program "$output_dir/testsmartselection" --compiler "$compiler" --rtl "$unit_root" \
   --output "$output_dir/selector-fixtures"
 otool -L "$output_dir/testsmartnetworkhttp" > "$output_dir/smart-imports.txt"
 stage smart-imports python3 "$GITHUB_WORKSPACE/ci/check_smart_imports.py" "$output_dir/smart-imports.txt"
-stage smart-native-tls-acceptance python3 "$source_dir/packages/fcl-net/tests/networkframework/testnetworktls.py" "$output_dir/testnetworknative" "$output_dir/testsmartnetworkhttp" "$output_dir/tls-fixtures" --peer "$output_dir/testnetworkpeer"
+stage smart-native-tls-acceptance python3 "$GITHUB_WORKSPACE/ci/testnetworktls.py" "$output_dir/testnetworknative" "$output_dir/testsmartnetworkhttp" "$output_dir/tls-fixtures" --peer "$output_dir/testnetworkpeer"
 echo 'PASS native prerequisites, smart selection and real native TLS; see every result and counter'

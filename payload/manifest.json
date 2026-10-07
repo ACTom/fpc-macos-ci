@@ -2,31 +2,15 @@
   "base_repository": "https://gitlab.com/freepascal.org/fpc/source",
   "base_commit": "2ec3f7a440e3c7b80cba4f7d2a7814c7bb36947b",
   "source_branch": "feature/smart-native-tls-minimal",
-  "prerequisite_tree": "c03c9acf269ba46a4dfe540cb28a9dda44fecc6c",
-  "final_tree": "4365c12c9bf48f55a43d1f47cd6473dc951faeb0",
-  "smart_patch_sha256": "ac666a51ac7e55cda702124ede2495081e3f3c7dbba6170e3879745a885778d7",
-  "patch_sha256": "ed8c63f077f9e8611e77fefacb90918a34aa9dbcf0e39a3f7d6a3b5777a621bf",
-  "prerequisite_patch_sha256": "5ab147d3d284c82211b767749906f25d7be9e9963f729471dbff59524bf157bf",
-  "prerequisite_patches": {
-    "schannel-minimal.patch": "172620f1347eea28de733ab4be8eda5a81da981318dec560896d34bca12b18b6",
-    "0001-client-peer-hook.patch": "29a3aaeb040788794edc5e5581cd50d36c298d2382ac768e91827ed674b45fb7",
-    "0002-networkframework-peer.patch": "3890f8bfb052b12ec8faa7cf7a2bb64a68a84c71b4786452462a8964ad43ff36"
-  },
-  "original_files_in_smart_diff": [
-    "packages/fpmake_add.inc",
-    "packages/fpmake_proc.inc",
-    "packages/gnutls/src/gnutls.pp",
-    "packages/gnutls/src/gnutlssockets.pp",
-    "packages/openssl/src/openssl.pas"
-  ],
+  "prerequisite_tree": "476e6ac16d1a0d57cbf87ba987d4ce9aadc9c190",
+  "final_tree": "918127d988deed956ec6e936559d685c0d73fe3d",
+  "patch_sha256": "f95befd2e33790d0a3bbb3cc05844caeeb2150dd10859a995ac68762b8bd2a3d",
+  "smart_patch_sha256": "bd3b5ac8ac962fc9eb9a5977585cda86fb73a3ef319c1b1b9d79cfda950f3a71",
+  "prerequisite_patch_sha256": "741c370584889de548b845958a61f4bcd72d6cd22b20695cd189498c22c54cc8",
   "files": [
     {
       "path": "packages/fcl-tls/Makefile",
       "sha256": "9ebbffd30c8a115a420e2ce06aa00bdaa737c46e5b2122ecbd82216cd7966515"
-    },
-    {
-      "path": "packages/fcl-tls/README.md",
-      "sha256": "8df5564043cfa08af4f261dac83373bd4b314d8a6ce5fa1af8c0e6885cc7ee2b"
     },
     {
       "path": "packages/fcl-tls/fpmake.pp",
@@ -57,20 +41,8 @@
       "sha256": "ff8918840c666ea4204d54d3dce793cc65fbf03a3d8f2d7f0c44f16e89c70087"
     },
     {
-      "path": "packages/fcl-tls/tests/buildtests.py",
-      "sha256": "3cfbc4cc88632cd050bcd2cac76e757ba8f8782b8a58a97a17c4754e4e25309f"
-    },
-    {
-      "path": "packages/fcl-tls/tests/testsmartexternal.py",
-      "sha256": "8e32dc3f3169926a2c13607081de9c1d56ef44862081857312cc0cdc1ac18acf"
-    },
-    {
       "path": "packages/fcl-tls/tests/testsmarthttp.pp",
       "sha256": "e304c3278814690f8eee2a9604da0f5f869600baf0d645be55f8549776aa1510"
-    },
-    {
-      "path": "packages/fcl-tls/tests/testsmartmatrix.py",
-      "sha256": "312339b7040127d277752a1580d1e9e99df0d588ccdb1caf59ad38a80569d735"
     },
     {
       "path": "packages/fcl-tls/tests/testsmartnative.pp",
@@ -78,7 +50,7 @@
     },
     {
       "path": "packages/fcl-tls/tests/testsmartnetworkhttp.pp",
-      "sha256": "823b7c0fc6c6d93c60c404b01ab8296f9e04559ac3c76a8d8750f71465fce680"
+      "sha256": "52a1b4c78fe7cc8f605dc8d63035895eac50add583e016c4d80a3b83f8fd7bc0"
     },
     {
       "path": "packages/fcl-tls/tests/testsmartselection.pp",
@@ -106,239 +78,6 @@
     }
   ],
   "prerequisite_files": [
-    {
-      "path": "packages/fcl-net/docs/client-peers.md",
-      "sha256": "23982bc49b9bfac98c6fafd8dddd8fcabb71d746bd6aae26a1164515046108ef"
-    },
-    {
-      "path": "packages/fcl-net/namespaced/System.Net.ClientPeers.pp",
-      "sha256": "4f7094bad81f7de5a6d2137bec6166f7792e09ef0b6288bfffa0685e3634a1a7"
-    },
-    {
-      "path": "packages/fcl-net/namespaced/System.Net.NetworkFrameworkAPI.pp",
-      "sha256": "595093c243ef116f48c352546cfc3882da9eb1ff03c7c2d70ee8fa5881ead05b"
-    },
-    {
-      "path": "packages/fcl-net/namespaced/System.Net.NetworkFrameworkNative.pp",
-      "sha256": "0c9ff2db38696225b0079cc83c78fee42f122b6aeb07103b63ddd96b8c84ef13"
-    },
-    {
-      "path": "packages/fcl-net/namespaced/System.Net.NetworkFrameworkSSLSockets.pp",
-      "sha256": "fb5234de6f1abba6b3a0ca9e895f7f65d601ada0cfce36493c19fa87c1cc6d58"
-    },
-    {
-      "path": "packages/fcl-net/namespaced/System.Net.SchannelSSLSockets.pp",
-      "sha256": "845cabdce941cca1f2d04fa0f97d89818ac44c8b1dc969bba2ebc3b4f3779553"
-    },
-    {
-      "path": "packages/fcl-net/namespaced/WinApi.SchannelSSPI.pp",
-      "sha256": "e6d8f7023163de2f2ca0a97a0994c18e1a18850769c039c798e73c4f9229e07d"
-    },
-    {
-      "path": "packages/fcl-net/src/clientpeers.pp",
-      "sha256": "209dec5a71118ed4e3ae847560b406ec6a6b155a45e2d68e8dc3af7d0b59096e"
-    },
-    {
-      "path": "packages/fcl-net/src/networkframeworkapi.pp",
-      "sha256": "ccb352bcbd610bb6d79d8556e833c26e764d68ef12ce7471ce3a0a42af6204e9"
-    },
-    {
-      "path": "packages/fcl-net/src/networkframeworknative.pp",
-      "sha256": "c2024e2c9299d36620e055f93940207b976a03815bb251606d53325ac800f2f9"
-    },
-    {
-      "path": "packages/fcl-net/src/networkframeworksslsockets.pp",
-      "sha256": "9a9b19812be99da4292b1ad8e43c8acc9f9365217d80bf15b6b1acc20e6ee99d"
-    },
-    {
-      "path": "packages/fcl-net/src/schannelsslsockets.pp",
-      "sha256": "3e7be23d28e59417cd731e58a737a37538633e19d84de5c865c66549bd028b0c"
-    },
-    {
-      "path": "packages/fcl-net/src/schannelsspi.pp",
-      "sha256": "96357ecadd115a9a8db3c1f9336800de07d1dc03fbeb911d5478dc3853e6e0a1"
-    },
-    {
-      "path": "packages/fcl-net/tests/networkframework/README.md",
-      "sha256": "d3f9fb116ca74524a519d9e099670cccd0db2ee538b1fcf7d5521c9d7d6d4fab"
-    },
-    {
-      "path": "packages/fcl-net/tests/networkframework/networkframeworkmodel.inc",
-      "sha256": "0e2f419d3a6331d2fa815b3e08f6a6c8d0ecb538a2628b42ec0dfb7cc148f2a7"
-    },
-    {
-      "path": "packages/fcl-net/tests/networkframework/run.sh",
-      "sha256": "5736c08c986ce457f6d7a73c7d188a93433cc1dc1288e49e37dd54dc3a167c36"
-    },
-    {
-      "path": "packages/fcl-net/tests/networkframework/testnetworkhttp.pp",
-      "sha256": "8596ad04cfb4640368d1bb791effc2938a900f031457cb0ee0de6e808cb9a8e5"
-    },
-    {
-      "path": "packages/fcl-net/tests/networkframework/testnetworknative.pp",
-      "sha256": "ac2822bebee85ceff5618db8d5eaeeb31ca681b29c1cc2e0c3a1028d15a7d85d"
-    },
-    {
-      "path": "packages/fcl-net/tests/networkframework/testnetworkpeer.pp",
-      "sha256": "ba631694a25100995158583b1082780c2b5dca6658d7c55c4162dfcedda1cdc8"
-    },
-    {
-      "path": "packages/fcl-net/tests/networkframework/testnetworktls.py",
-      "sha256": "74322fbfa639f9777d64d0f44d4fe42d9de8d48c655b659cc4cd34a92a215756"
-    },
-    {
-      "path": "packages/fcl-net/tests/schannel/README.md",
-      "sha256": "290f41a0cf4be1dd7af930e16e8712ebc4827cd2f4fdc69fb280dfcf77c523bb"
-    },
-    {
-      "path": "packages/fcl-net/tests/schannel/run.ps1",
-      "sha256": "95a20c64120527e52c2d4c6ad71ec911e0c20ad9cd12b1e00bd154e0d5ae0daf"
-    },
-    {
-      "path": "packages/fcl-net/tests/schannel/testschannel.pp",
-      "sha256": "7483b4919acd855f401dc01532d3f953554db80dd453f9104543c498b2e02e07"
-    },
-    {
-      "path": "packages/fcl-net/tests/schannel/testtls.py",
-      "sha256": "6e7d185ad3efbaba9b121cc655ff8cf339abec4bbd59af5a91fa63b46ecc6025"
-    },
-    {
-      "path": "packages/fcl-web/tests/testclientpeer.pp",
-      "sha256": "948f523e1ff28965371a606dec246ec00103a00899f0150e2d50c18628354540"
-    },
-    {
-      "path": "packages/fcl-web/tests/testsocketpeer.pp",
-      "sha256": "58046596fa57d78030d28d37eff9fc639d7d5ef7dce2d46c11f1cb337e7a5462"
-    },
-    {
-      "path": "packages/fcl-net/fpmake.pp",
-      "sha256": "1a38abfe18a37d77fa5c83d8413d680df53d15a1a1194bd3a9a7d71ae842516d"
-    },
-    {
-      "path": "packages/fcl-net/namespaces.lst",
-      "sha256": "ba8a19bd60ee00f0570514797423a677807f88ba5b3e489728f29f2cf6065a24"
-    },
-    {
-      "path": "packages/fcl-net/src/sslsockets.pp",
-      "sha256": "7cdb83a74fb56463d29c750742fdc6e4f82a4ceb09422f2c5dae0fcdd833890b"
-    },
-    {
-      "path": "packages/fcl-web/src/base/fphttpclient.pp",
-      "sha256": "960d6518bde4782993f82e4e0f7265104e0216718c4f36b56dc224c3f65014bd"
-    }
-  ],
-  "numstat": [
-    {
-      "added": "2",
-      "deleted": "0",
-      "path": "packages/fcl-tls/Makefile"
-    },
-    {
-      "added": "158",
-      "deleted": "0",
-      "path": "packages/fcl-tls/README.md"
-    },
-    {
-      "added": "34",
-      "deleted": "0",
-      "path": "packages/fcl-tls/fpmake.pp"
-    },
-    {
-      "added": "3",
-      "deleted": "0",
-      "path": "packages/fcl-tls/namespaced/System.Net.SmartSSLSockets.pp"
-    },
-    {
-      "added": "3",
-      "deleted": "0",
-      "path": "packages/fcl-tls/namespaced/System.Net.TLSBackendPolicy.pp"
-    },
-    {
-      "added": "3",
-      "deleted": "0",
-      "path": "packages/fcl-tls/namespaced/System.Net.TLSLibraryProbe.pp"
-    },
-    {
-      "added": "233",
-      "deleted": "0",
-      "path": "packages/fcl-tls/src/smartsslsockets.pp"
-    },
-    {
-      "added": "275",
-      "deleted": "0",
-      "path": "packages/fcl-tls/src/tlsbackendpolicy.pp"
-    },
-    {
-      "added": "340",
-      "deleted": "0",
-      "path": "packages/fcl-tls/src/tlslibraryprobe.pp"
-    },
-    {
-      "added": "60",
-      "deleted": "0",
-      "path": "packages/fcl-tls/tests/buildtests.py"
-    },
-    {
-      "added": "161",
-      "deleted": "0",
-      "path": "packages/fcl-tls/tests/testsmartexternal.py"
-    },
-    {
-      "added": "91",
-      "deleted": "0",
-      "path": "packages/fcl-tls/tests/testsmarthttp.pp"
-    },
-    {
-      "added": "229",
-      "deleted": "0",
-      "path": "packages/fcl-tls/tests/testsmartmatrix.py"
-    },
-    {
-      "added": "237",
-      "deleted": "0",
-      "path": "packages/fcl-tls/tests/testsmartnative.pp"
-    },
-    {
-      "added": "113",
-      "deleted": "0",
-      "path": "packages/fcl-tls/tests/testsmartnetworkhttp.pp"
-    },
-    {
-      "added": "138",
-      "deleted": "0",
-      "path": "packages/fcl-tls/tests/testsmartselection.pp"
-    },
-    {
-      "added": "2",
-      "deleted": "0",
-      "path": "packages/fpmake_add.inc"
-    },
-    {
-      "added": "6",
-      "deleted": "0",
-      "path": "packages/fpmake_proc.inc"
-    },
-    {
-      "added": "49",
-      "deleted": "3",
-      "path": "packages/gnutls/src/gnutls.pp"
-    },
-    {
-      "added": "9",
-      "deleted": "1",
-      "path": "packages/gnutls/src/gnutlssockets.pp"
-    },
-    {
-      "added": "15",
-      "deleted": "0",
-      "path": "packages/openssl/src/openssl.pas"
-    }
-  ],
-  "canonical_files": [
-    {
-      "path": "packages/fcl-net/docs/client-peers.md",
-      "sha256": "dd9d241ef4a6714b0ba5bb5c0792b3841d4803f91d8a50ecd37562a35400aaba"
-    },
     {
       "path": "packages/fcl-net/fpmake.pp",
       "sha256": "1a38abfe18a37d77fa5c83d8413d680df53d15a1a1194bd3a9a7d71ae842516d"
@@ -381,7 +120,7 @@
     },
     {
       "path": "packages/fcl-net/src/networkframeworknative.pp",
-      "sha256": "50e5a47b64cbef8b610d37ba35a6724d87ce26fe17905f70e45692ff47f00f4b"
+      "sha256": "f1c17aeb49757f5c0eb5bceaeb7f32b07e6ace961f70a7ed2fbedc982ad8dcfb"
     },
     {
       "path": "packages/fcl-net/src/networkframeworksslsockets.pp",
@@ -400,56 +139,126 @@
       "sha256": "d68338d52b2a3bbb9b005a2029339969e61685b56d087b6d27b0939370f925ac"
     },
     {
-      "path": "packages/fcl-net/tests/networkframework/README.md",
-      "sha256": "6f14796f653f57edb957030a63a331931ae696c28a925315a938b6109b0ffbe7"
-    },
-    {
-      "path": "packages/fcl-net/tests/networkframework/networkframeworkmodel.inc",
+      "path": "packages/fcl-net/tests/networkframeworkmodel.inc",
       "sha256": "0ea2589231bd3ffa39445f3e14a6409627d1420748d85c431f78eaa7d8f7bf2b"
     },
     {
-      "path": "packages/fcl-net/tests/networkframework/run.sh",
-      "sha256": "b1676a423279b7ec416a039245daca4124fb277c69c156f34053f467342f735e"
+      "path": "packages/fcl-net/tests/testnetworkhttp.pp",
+      "sha256": "f493539a85c5a553e62cb366b5b86b9320f53c92b9ffa7be5895112b0238f056"
     },
     {
-      "path": "packages/fcl-net/tests/networkframework/testnetworkhttp.pp",
-      "sha256": "76737d629b0a251b599786c0ad6009458d299111fabce11118ad6a56c2a8ef36"
+      "path": "packages/fcl-net/tests/testnetworknative.pp",
+      "sha256": "6cd56b3a5c7b28842af465ffa639576e1f49b2c5d5d2a554230908b11fd9419c"
     },
     {
-      "path": "packages/fcl-net/tests/networkframework/testnetworknative.pp",
-      "sha256": "c6b84dee02a2b6c43810dbd731dd01b5f9555313047e06ed20f8b642d33d1335"
-    },
-    {
-      "path": "packages/fcl-net/tests/networkframework/testnetworkpeer.pp",
+      "path": "packages/fcl-net/tests/testnetworkpeer.pp",
       "sha256": "174f2bc120c5850d5c348a3c62712914780b9874002a35d4b3faa1eb4380eac5"
     },
     {
-      "path": "packages/fcl-net/tests/networkframework/testnetworktls.py",
-      "sha256": "280a14377abdfc0b684cebaefccae356efd1fa59bf5885768cb977199376fc06"
-    },
-    {
-      "path": "packages/fcl-net/tests/schannel/README.md",
-      "sha256": "be2b86f1d0982c017612a2e695d22203a25e8dbf6a508a12b37cab775622be0a"
-    },
-    {
-      "path": "packages/fcl-net/tests/schannel/run.ps1",
-      "sha256": "eb8318bea963730a04d6d58c46e0b9412378153a9d72eb7199c4c5785d10de03"
-    },
-    {
-      "path": "packages/fcl-net/tests/schannel/testschannel.pp",
+      "path": "packages/fcl-net/tests/testschannel.pp",
       "sha256": "0fa0c5242086f6642500dde9660cabd812434e0f2c6b6e7e9d5b4953d44e72f6"
     },
     {
-      "path": "packages/fcl-net/tests/schannel/testtls.py",
-      "sha256": "5cbdc8c14b1619d41b376204a46dac364423b13f81dc877251fe7642eedcd773"
+      "path": "packages/fcl-web/src/base/fphttpclient.pp",
+      "sha256": "f37f756f002818e0aa017c04ba6eccb9b6ac04305233875029fbf08531d050bd"
+    },
+    {
+      "path": "packages/fcl-web/tests/tcclientpeer.pp",
+      "sha256": "f2fdb44a30838d453de84449097863e4adf41096af93a3dd2c8b6b93382129ed"
+    },
+    {
+      "path": "packages/fcl-web/tests/testfpweb.lpr",
+      "sha256": "43589e002cda2f1450b19a49f6e16d4e502b5e2aec1535d2e4e47b82f3d39edb"
+    },
+    {
+      "path": "packages/fcl-web/tests/testsocketpeer.pp",
+      "sha256": "c90b50c299b9ec440018031021f6ed8fd77955febd74f573ce05f439ecfee4de"
+    }
+  ],
+  "canonical_files": [
+    {
+      "path": "packages/fcl-net/fpmake.pp",
+      "sha256": "1a38abfe18a37d77fa5c83d8413d680df53d15a1a1194bd3a9a7d71ae842516d"
+    },
+    {
+      "path": "packages/fcl-net/namespaced/System.Net.ClientPeers.pp",
+      "sha256": "2110d860b03301f4fb1b20f555f15f85e1296a185065b76b138d901de6a6154b"
+    },
+    {
+      "path": "packages/fcl-net/namespaced/System.Net.NetworkFrameworkAPI.pp",
+      "sha256": "9439f3ac68c05943b0396b61e663f8a501fe3fab7430eec38e74f6a5f55ee70b"
+    },
+    {
+      "path": "packages/fcl-net/namespaced/System.Net.NetworkFrameworkNative.pp",
+      "sha256": "87e81a33489cd2a2e2da52ae1ea329f67b6c1f72b5242c640297163456418431"
+    },
+    {
+      "path": "packages/fcl-net/namespaced/System.Net.NetworkFrameworkSSLSockets.pp",
+      "sha256": "82aa3167f2678e1f40717657a17aa25dab8ac229dc6995b3e4f47751cb821775"
+    },
+    {
+      "path": "packages/fcl-net/namespaced/System.Net.SchannelSSLSockets.pp",
+      "sha256": "89108f0c967a39a6b72c7dd0a2c1e7d8616fec77a9f53e46f17fdc08fdb1a472"
+    },
+    {
+      "path": "packages/fcl-net/namespaced/WinApi.SchannelSSPI.pp",
+      "sha256": "6a14a8ffdf3daafa716de8e2e16df4d2056473fe2963e37d3447da1e2fa47846"
+    },
+    {
+      "path": "packages/fcl-net/namespaces.lst",
+      "sha256": "ba8a19bd60ee00f0570514797423a677807f88ba5b3e489728f29f2cf6065a24"
+    },
+    {
+      "path": "packages/fcl-net/src/clientpeers.pp",
+      "sha256": "97b166da205e00f08c0d88962dec85b01a843dd4003e6095f0024d088843c60c"
+    },
+    {
+      "path": "packages/fcl-net/src/networkframeworkapi.pp",
+      "sha256": "8aa179a7c12ead282d5daa9e35ed91f39ca3db0ff824541ab09da9172ae9aef5"
+    },
+    {
+      "path": "packages/fcl-net/src/networkframeworknative.pp",
+      "sha256": "f1c17aeb49757f5c0eb5bceaeb7f32b07e6ace961f70a7ed2fbedc982ad8dcfb"
+    },
+    {
+      "path": "packages/fcl-net/src/networkframeworksslsockets.pp",
+      "sha256": "55573ea67524ec6d9523817000b32837edb23e6887231c9069883d6161843681"
+    },
+    {
+      "path": "packages/fcl-net/src/schannelsslsockets.pp",
+      "sha256": "ca1280f160b3ab9adcc1e3399f1ae6a9be2c0c7a62c0b5209043283aadaf7a9f"
+    },
+    {
+      "path": "packages/fcl-net/src/schannelsspi.pp",
+      "sha256": "e20ce48d9b66714dc7eea6ea6c0eeadaf74463e83fbaf23abcd66f68bb4071ec"
+    },
+    {
+      "path": "packages/fcl-net/src/sslsockets.pp",
+      "sha256": "d68338d52b2a3bbb9b005a2029339969e61685b56d087b6d27b0939370f925ac"
+    },
+    {
+      "path": "packages/fcl-net/tests/networkframeworkmodel.inc",
+      "sha256": "0ea2589231bd3ffa39445f3e14a6409627d1420748d85c431f78eaa7d8f7bf2b"
+    },
+    {
+      "path": "packages/fcl-net/tests/testnetworkhttp.pp",
+      "sha256": "f493539a85c5a553e62cb366b5b86b9320f53c92b9ffa7be5895112b0238f056"
+    },
+    {
+      "path": "packages/fcl-net/tests/testnetworknative.pp",
+      "sha256": "6cd56b3a5c7b28842af465ffa639576e1f49b2c5d5d2a554230908b11fd9419c"
+    },
+    {
+      "path": "packages/fcl-net/tests/testnetworkpeer.pp",
+      "sha256": "174f2bc120c5850d5c348a3c62712914780b9874002a35d4b3faa1eb4380eac5"
+    },
+    {
+      "path": "packages/fcl-net/tests/testschannel.pp",
+      "sha256": "0fa0c5242086f6642500dde9660cabd812434e0f2c6b6e7e9d5b4953d44e72f6"
     },
     {
       "path": "packages/fcl-tls/Makefile",
       "sha256": "9ebbffd30c8a115a420e2ce06aa00bdaa737c46e5b2122ecbd82216cd7966515"
-    },
-    {
-      "path": "packages/fcl-tls/README.md",
-      "sha256": "8df5564043cfa08af4f261dac83373bd4b314d8a6ce5fa1af8c0e6885cc7ee2b"
     },
     {
       "path": "packages/fcl-tls/fpmake.pp",
@@ -480,20 +289,8 @@
       "sha256": "ff8918840c666ea4204d54d3dce793cc65fbf03a3d8f2d7f0c44f16e89c70087"
     },
     {
-      "path": "packages/fcl-tls/tests/buildtests.py",
-      "sha256": "3cfbc4cc88632cd050bcd2cac76e757ba8f8782b8a58a97a17c4754e4e25309f"
-    },
-    {
-      "path": "packages/fcl-tls/tests/testsmartexternal.py",
-      "sha256": "8e32dc3f3169926a2c13607081de9c1d56ef44862081857312cc0cdc1ac18acf"
-    },
-    {
       "path": "packages/fcl-tls/tests/testsmarthttp.pp",
       "sha256": "e304c3278814690f8eee2a9604da0f5f869600baf0d645be55f8549776aa1510"
-    },
-    {
-      "path": "packages/fcl-tls/tests/testsmartmatrix.py",
-      "sha256": "312339b7040127d277752a1580d1e9e99df0d588ccdb1caf59ad38a80569d735"
     },
     {
       "path": "packages/fcl-tls/tests/testsmartnative.pp",
@@ -501,7 +298,7 @@
     },
     {
       "path": "packages/fcl-tls/tests/testsmartnetworkhttp.pp",
-      "sha256": "823b7c0fc6c6d93c60c404b01ab8296f9e04559ac3c76a8d8750f71465fce680"
+      "sha256": "52a1b4c78fe7cc8f605dc8d63035895eac50add583e016c4d80a3b83f8fd7bc0"
     },
     {
       "path": "packages/fcl-tls/tests/testsmartselection.pp",
@@ -512,8 +309,12 @@
       "sha256": "f37f756f002818e0aa017c04ba6eccb9b6ac04305233875029fbf08531d050bd"
     },
     {
-      "path": "packages/fcl-web/tests/testclientpeer.pp",
-      "sha256": "512bcd0af9e787638d2044df9867febd29494f6cc5340b1f4df6017ae914802c"
+      "path": "packages/fcl-web/tests/tcclientpeer.pp",
+      "sha256": "f2fdb44a30838d453de84449097863e4adf41096af93a3dd2c8b6b93382129ed"
+    },
+    {
+      "path": "packages/fcl-web/tests/testfpweb.lpr",
+      "sha256": "43589e002cda2f1450b19a49f6e16d4e502b5e2aec1535d2e4e47b82f3d39edb"
     },
     {
       "path": "packages/fcl-web/tests/testsocketpeer.pp",
@@ -540,47 +341,13 @@
       "sha256": "9fb65aa967d816b74fd87a62f1a737ba93aeb99f0a9d31e6c089100c19fb589f"
     }
   ],
-  "added": 2161,
-  "deleted": 4,
-  "smart_sequential_apply": "passed",
-  "core_changes_in_smart": false,
-  "source_commit_created": false,
-  "source_cached_diff_empty": true,
-  "windows_validation": {
-    "os": "Windows 10.0.19044 x64",
-    "compiler": "FPC 3.3.1, unchanged compiler/RTL baseline 2ec3f7a",
-    "standard_packages": "passed 100%",
-    "dotted_packages": "passed 100%",
-    "selection_only_standard": {
-      "passed": 30,
-      "total": 30
-    },
-    "selection_only_dotted": {
-      "passed": 30,
-      "total": 30
-    },
-    "real_schannel_standard": {
-      "passed": 42,
-      "total": 42
-    },
-    "real_schannel_dotted": {
-      "passed": 42,
-      "total": 42
-    },
-    "real_openssl_standard": {
-      "passed": 16,
-      "total": 16
-    },
-    "real_openssl_dotted": {
-      "passed": 16,
-      "total": 16
-    },
-    "actual_openssl_version": "3.5.4 (0x30500040), Git-distributed runtime copied to isolated outputs",
-    "real_gnutls": "NOT RUN: no real Windows runtime found; fake fixtures only prove selection/verification setup",
-    "macos": "Run11: Intel selector35/35, native+smart68/68 plus4EOF observations; ARM selector33/35, two fat-image mock loads failed, TLS stage NOT RUN. Final fixture alignment changed to16KiB, NOT RERUN.",
-    "retained_prior_failures": [
-      "OpenSSL first harness variable-name shadowing, interrupted after seven cases",
-      "package invocation RTL metadata/path/global dotted option corrections"
-    ]
-  }
+  "original_files_in_smart_diff": [
+    "packages/fpmake_add.inc",
+    "packages/fpmake_proc.inc",
+    "packages/gnutls/src/gnutls.pp",
+    "packages/gnutls/src/gnutlssockets.pp",
+    "packages/openssl/src/openssl.pas"
+  ],
+  "source_only": true,
+  "new_support_scripts_or_docs": false
 }

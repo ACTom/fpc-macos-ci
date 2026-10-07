@@ -1,178 +1,14 @@
 diff --git a/packages/fcl-tls/Makefile b/packages/fcl-tls/Makefile
 new file mode 100644
-index 00000000..9cb6da8a
+index 000000000..9cb6da8af
 --- /dev/null
 +++ b/packages/fcl-tls/Makefile
 @@ -0,0 +1,2 @@
 +PACKAGE_NAME=fcl-tls
 +include ../build/Makefile.pkg
-diff --git a/packages/fcl-tls/README.md b/packages/fcl-tls/README.md
-new file mode 100644
-index 00000000..5637ca10
---- /dev/null
-+++ b/packages/fcl-tls/README.md
-@@ -0,0 +1,158 @@
-+# Explicit smart TLS selection
-+
-+`fcl-tls` is a package above `fcl-net`, `openssl` and `gnutls`. It requires the
-+native Schannel unit and the Network.framework/client-peer changes first.
-+It adds no further HTTP/socket-core changes. The target is the FPC 3.3.1 branch;
-+use a compiler and RTL built from that branch.
-+
-+```pascal
-+uses fphttpclient, smartsslsockets, tlsbackendpolicy;
-+var Client: TFPHTTPClient;
-+begin
-+  InitializeSmartTLS; // once, before loaders or clients; defaults to stbAuto
-+  Writeln(SmartTLSBackendName(SmartTLSSelection.Backend));
-+  Client := TFPHTTPClient.Create(nil);
-+  try
-+    Client.VerifySSLCertificate := True;
-+    Writeln(Client.Get('https://example.com/'));
-+  finally
-+    Client.Free;
-+  end;
-+end.
-+```
-+
-+The dotted units are `System.Net.SmartSSLSockets` and
-+`System.Net.TLSBackendPolicy`. On Unix threaded applications put `cthreads`
-+(`UnixApi.CThreads`) first, as usual.
-+
-+## Choice and failure policy
-+
-+Call `InitializeSmartTLS(stbOpenSSL)`, `stbGnuTLS`, `stbSchannel`, or
-+`stbNetworkFramework` for an explicit backend. The optional second argument
-+is an existing, absolute executable path; the default comes from the operating
-+system, not `ParamStr(0)`. `SmartTLSSelection` reports the backend, canonical
-+executable path, actual library paths, version, and diagnostic.
-+`CreateSmartTLSHandler` creates the selected handler explicitly; ordinary
-+`fphttpclient` uses its registered default after initialization.
-+
-+Auto tries complete bundled OpenSSL first, then bundled GnuTLS, then Windows
-+Schannel or macOS Network.framework. Missing candidates permit the next step.
-+A present incomplete pair, invalid image, wrong CPU, missing required client
-+symbol, unsupported version, or mismatched SSL/crypto dependency fails explicitly.
-+Initialization failure and successful selection are retained. Repeating the same
-+request returns that result; changing the preference/path fails. Connection,
-+certificate, callback, handshake and IO failures never select another backend.
-+There is no verification downgrade. An explicit native override ignores bundled
-+external libraries.
-+
-+Application roots are the executable directory and its `lib` subdirectory.
-+For `Name.app/Contents/MacOS/...`, also search `Contents/Frameworks` and
-+`Contents/lib`, between those two roots. Resolve symlinks/junctions; a library
-+must remain within the application root (`Contents` for an app bundle).
-+On older Windows without the final-path API, unresolved reparse paths fail;
-+ordinary paths remain supported. No working-directory or PATH scan identifies
-+bundled libraries. Native API availability follows the prerequisite backends.
-+No Secure Transport or legacy macOS fallback is added.
-+
-+Within each root the supported filename profiles are tried in this order:
-+
-+| OS | OpenSSL pair | GnuTLS |
-+| --- | --- | --- |
-+| Windows | `libssl-3-x64.dll`/`libcrypto-3-x64.dll` (or `-arm64` on ARM64), `libssl-3.dll`/`libcrypto-3.dll`, `libssl-1_1-x64.dll`/`libcrypto-1_1-x64.dll` on x64, `libssl-1_1.dll`/`libcrypto-1_1.dll`, `libssl.dll`/`libcrypto.dll` | `libgnutls-30.dll`, `libgnutls.dll` |
-+| macOS | `libssl.3.dylib`/`libcrypto.3.dylib`, `.1.1.dylib`, unversioned `.dylib` pair | `libgnutls.30.dylib`, `libgnutls.dylib` |
-+| Linux | `libssl.so.3`/`libcrypto.so.3`, `.so.1.1`, unversioned `.so` pair | `libgnutls.so.30`, `libgnutls.so` |
-+
-+OpenSSL must be 1.1.1 or major 3; GnuTLS must be at least 3.6.0. The legacy
-+Windows `ssleay32.dll`/`libeay32.dll` names are recognized after the profiles
-+above, so an old bundle fails clearly rather than being silently ignored.
-+Pairs are never assembled across roots/profiles. Dependencies of a bundled
-+library still follow the operating system's loader rules; applications must
-+package those dependencies correctly. This selector does not install or alter
-+library search paths.
-+
-+## Loader compatibility and certificate options
-+
-+Existing explicit `opensslsockets` and `gnutlssockets` imports retain their
-+behavior when the smart unit is absent. Importing smart requires the explicit
-+initializer before using the default TLS handler. The smart initializer clears
-+defaults registered by its dependencies, then registers the chosen concrete
-+class only after selection succeeds. No lazy factory or core API is added.
-+
-+The new atomic `InitSSLInterfaceIfUnloaded` and `LoadGnuTLSIfUnloaded` APIs
-+prevent selection from reusing or replacing an already initialized target
-+loader. Even a matching earlier initialization fails: call smart first or use
-+the existing explicit backend. The probe releases only its own module references.
-+There is no global ownership claim, unload, replacement, reset, or automatic
-+finalization. Existing loader entry points keep their normal semantics; GnuTLS
-+loader operations now share a lock. Applications must not destroy/free/replace
-+the selected loader while using smart handlers. New handler creation detects an
-+explicitly freed interface and fails without reloading or changing selection.
-+
-+`TFPHTTPClient.VerifySSLCertificate` still defaults to False; smart preserves
-+default, True, False and the handler's after-create setting. Set True for system
-+trust/hostname validation with the native backends. External backends retain
-+their own trust configuration; bundling OpenSSL does not give it the Windows
-+system trust store. A small smart GnuTLS subclass installs automatic certificate
-+verification only for True. The plain GnuTLS class keeps its existing behavior
-+through a default virtual setup hook. GnuTLS >=3.6 uses its normal implicit
-+library initialization; callers disabling that upstream mechanism must provide
-+normal global initialization themselves.
-+
-+The selected concrete backend's capabilities still apply: the native providers
-+are clients, reject Accept, and reject unsupported custom credentials/configuration.
-+Network.framework owns TCP and uses the prerequisite client-peer hook. Its
-+unsupported proxy/Unix socket/SSE/extraction settings fail explicitly. Native
-+EOF behavior and HTTP framing are unchanged by smart. See the native backend
-+documentation/tests for their limitations; smart is not a server abstraction.
-+
-+## Reproduce tests
-+
-+Build the compiler cycle, matching RTL and packages using the repository's
-+normal guide. For a full package build include `packages/fpmake_add.inc` and
-+`fpmake_proc.inc`; both register this package. For dotted packages build a dotted
-+RTL separately and use `fpmake compile -ns --unitoutputdir=units/dotted
-+-o '-dFPC_DOTTEDUNITS'` with its unit directory and RTL package metadata.
-+
-+```text
-+python packages/fcl-tls/tests/buildtests.py --source SOURCE --compiler COMPILER --rtl RTL_UNITS --output TEST_OUT
-+python packages/fcl-tls/tests/testsmartmatrix.py --source SOURCE --compiler COMPILER --rtl STANDARD_RTL_UNITS --program TEST_OUT/testsmartselection --output MATRIX_OUT
-+```
-+
-+Use `.exe` on Windows. Add `--dotted` to `buildtests.py` and pass dotted RTL
-+for that build. On macOS pass `--sdk SDK_PATH --minimum 10.8` (Intel) or `11.0`
-+(ARM64); deployment metadata does not prove old-system runtime support.
-+
-+The matrix runs a fresh process per case, including 16 concurrent initializers.
-+Its deliberately minimal fixture DLLs/dylibs are **selection-only**, never TLS
-+implementations or evidence of real GnuTLS networking. Windows uses the existing
-+Pascal compiler to build fixtures; Unix uses the existing C compiler for fixtures.
-+Production code remains Pascal and uses the chosen TLS implementation.
-+
-+For real Windows no-third-party-library tests, leave `TEST_OUT` free of bundled
-+DLLs and run the prerequisite's fixture against `testsmartnative.exe`:
-+
-+```text
-+python packages/fcl-net/tests/schannel/testtls.py TEST_OUT/testsmartnative.exe EXISTING_OPENSSL_CLI FRESH_FIXTURE_OUT --online
-+```
-+
-+This includes constructor/module audit, certificate status-specific rejections,
-+fragmented 1 MiB receive/upload, HTTP framing, timeouts and close_notify handling.
-+For real external HTTPS, copy actual application libraries/dependencies and
-+`testsmarthttp` into a separate directory, then run:
-+
-+```text
-+python packages/fcl-tls/tests/testsmartexternal.py --program APP/testsmarthttp --openssl EXISTING_OPENSSL_CLI --backend openssl --output FRESH_FIXTURE_OUT
-+```
-+
-+Use `--backend gnutls` with real GnuTLS libraries. This matrix isolates trusted
-+hostname/expiry failures, untrusted chains, True/False/default/after-create,
-+callback veto and one-connection reuse; a timeout cannot pass certificate rejection.
-+For actual macOS smart/native acceptance use the prerequisite's
-+`testnetworktls.py`, with `testsmartnetworkhttp` as its HTTP program and the
-+unchanged native/public-peer programs. All fixture certificates stay local;
-+tests never change the OS trust store.
-+
-+Record OS/CPU, compiler/library versions, compile/package logs and every matrix
-+result. Windows results do not establish macOS runtime behavior. A missing real
-+GnuTLS runtime, untested architectures/OS versions, failed public network cases,
-+or unrun checks must remain explicit in the review record.
 diff --git a/packages/fcl-tls/fpmake.pp b/packages/fcl-tls/fpmake.pp
 new file mode 100644
-index 00000000..a7bb7b15
+index 000000000..a7bb7b151
 --- /dev/null
 +++ b/packages/fcl-tls/fpmake.pp
 @@ -0,0 +1,34 @@
@@ -212,7 +48,7 @@ index 00000000..a7bb7b15
 +{$endif ALLPACKAGES}
 diff --git a/packages/fcl-tls/namespaced/System.Net.SmartSSLSockets.pp b/packages/fcl-tls/namespaced/System.Net.SmartSSLSockets.pp
 new file mode 100644
-index 00000000..50141abf
+index 000000000..50141abfe
 --- /dev/null
 +++ b/packages/fcl-tls/namespaced/System.Net.SmartSSLSockets.pp
 @@ -0,0 +1,3 @@
@@ -221,7 +57,7 @@ index 00000000..50141abf
 +{$i smartsslsockets.pp}
 diff --git a/packages/fcl-tls/namespaced/System.Net.TLSBackendPolicy.pp b/packages/fcl-tls/namespaced/System.Net.TLSBackendPolicy.pp
 new file mode 100644
-index 00000000..e2d59cae
+index 000000000..e2d59cae5
 --- /dev/null
 +++ b/packages/fcl-tls/namespaced/System.Net.TLSBackendPolicy.pp
 @@ -0,0 +1,3 @@
@@ -230,7 +66,7 @@ index 00000000..e2d59cae
 +{$i tlsbackendpolicy.pp}
 diff --git a/packages/fcl-tls/namespaced/System.Net.TLSLibraryProbe.pp b/packages/fcl-tls/namespaced/System.Net.TLSLibraryProbe.pp
 new file mode 100644
-index 00000000..7b536686
+index 000000000..7b5366860
 --- /dev/null
 +++ b/packages/fcl-tls/namespaced/System.Net.TLSLibraryProbe.pp
 @@ -0,0 +1,3 @@
@@ -239,7 +75,7 @@ index 00000000..7b536686
 +{$i tlslibraryprobe.pp}
 diff --git a/packages/fcl-tls/src/smartsslsockets.pp b/packages/fcl-tls/src/smartsslsockets.pp
 new file mode 100644
-index 00000000..c7f22049
+index 000000000..c7f220494
 --- /dev/null
 +++ b/packages/fcl-tls/src/smartsslsockets.pp
 @@ -0,0 +1,233 @@
@@ -478,7 +314,7 @@ index 00000000..c7f22049
 +end.
 diff --git a/packages/fcl-tls/src/tlsbackendpolicy.pp b/packages/fcl-tls/src/tlsbackendpolicy.pp
 new file mode 100644
-index 00000000..7d23e2eb
+index 000000000..7d23e2ebc
 --- /dev/null
 +++ b/packages/fcl-tls/src/tlsbackendpolicy.pp
 @@ -0,0 +1,275 @@
@@ -759,7 +595,7 @@ index 00000000..7d23e2eb
 +end.
 diff --git a/packages/fcl-tls/src/tlslibraryprobe.pp b/packages/fcl-tls/src/tlslibraryprobe.pp
 new file mode 100644
-index 00000000..bd2758da
+index 000000000..bd2758daa
 --- /dev/null
 +++ b/packages/fcl-tls/src/tlslibraryprobe.pp
 @@ -0,0 +1,340 @@
@@ -1103,242 +939,9 @@ index 00000000..bd2758da
 +  inherited Destroy;
 +end;
 +end.
-diff --git a/packages/fcl-tls/tests/buildtests.py b/packages/fcl-tls/tests/buildtests.py
-new file mode 100644
-index 00000000..6806e0c8
---- /dev/null
-+++ b/packages/fcl-tls/tests/buildtests.py
-@@ -0,0 +1,60 @@
-+#!/usr/bin/env python3
-+"""Compile tests with a matching branch compiler/RTL and built FCL packages."""
-+import argparse
-+import json
-+from pathlib import Path
-+import subprocess
-+
-+
-+def main():
-+    ap = argparse.ArgumentParser()
-+    ap.add_argument('--source', type=Path, required=True)
-+    ap.add_argument('--compiler', type=Path, required=True)
-+    ap.add_argument('--rtl', type=Path, required=True)
-+    ap.add_argument('--output', type=Path, required=True)
-+    ap.add_argument('--dotted', action='store_true')
-+    ap.add_argument('--sdk')
-+    ap.add_argument('--minimum')
-+    args = ap.parse_args()
-+    source, compiler, out = args.source.resolve(), args.compiler.resolve(), args.output.resolve()
-+    out.mkdir(parents=True, exist_ok=True)
-+    cpu = subprocess.check_output([str(compiler), '-iTP'], text=True).strip()
-+    system = subprocess.check_output([str(compiler), '-iTO'], text=True).strip()
-+    opts = ['-n', '-gl', '-dFPC_NETWORKFRAMEWORK_DIAGNOSTICS', '-Fu'+str(args.rtl.resolve())]
-+    if args.dotted:
-+        opts += ['-dFPC_DOTTEDUNITS', '-dTEST_DOTTEDUNITS']
-+    if args.sdk:
-+        opts += ['-XR'+args.sdk]
-+    if args.minimum:
-+        opts += ['-WM'+args.minimum]
-+    for package in ['fcl-tls', 'gnutls', 'openssl', 'fcl-net', 'fcl-web']:
-+        folder = source / 'packages' / package
-+        src = folder / 'src'
-+        if package == 'fcl-web':
-+            src /= 'base'
-+        opts += ['-Fi'+str(src), '-Fu'+str(folder/'namespaced' if args.dotted else src)]
-+    opts += ['-Fi'+str(source/'packages/fcl-net/src'/('win' if system.startswith('win') else 'unix'))]
-+    unit_pattern = '*/units/dotted/units/' if args.dotted else '*/units/'
-+    opts += ['-Fu'+str(p) for p in sorted((source/'packages').glob(unit_pattern+cpu+'-'+system))]
-+    opts += ['-FU'+str(out), '-FE'+str(out)]
-+    tests = ['testsmartselection', 'testsmarthttp']
-+    if system.startswith('win'):
-+        tests += ['testsmartnative']
-+    elif system == 'darwin' and not args.dotted:
-+        tests += ['testsmartnetworkhttp']
-+    rows = []
-+    for name in tests:
-+        with (out/(name+'-compile.log')).open('wb') as log:
-+            p = subprocess.run([str(compiler), *opts, str(source/'packages/fcl-tls/tests'/(name+'.pp'))],
-+                               cwd=out, stdout=log, stderr=log)
-+        rows.append({'program': name, 'returncode': p.returncode})
-+        print(name, p.returncode, flush=True)
-+        if p.returncode:
-+            print((out/(name+'-compile.log')).read_text(errors='replace')[-4000:])
-+            break
-+    (out/'compile-results.json').write_text(json.dumps(rows, indent=2)+'\n', encoding='utf-8')
-+    return p.returncode
-+
-+
-+if __name__ == '__main__':
-+    raise SystemExit(main())
-diff --git a/packages/fcl-tls/tests/testsmartexternal.py b/packages/fcl-tls/tests/testsmartexternal.py
-new file mode 100644
-index 00000000..547f413d
---- /dev/null
-+++ b/packages/fcl-tls/tests/testsmartexternal.py
-@@ -0,0 +1,161 @@
-+#!/usr/bin/env python3
-+"""Real bundled OpenSSL/GnuTLS HTTPS; no mock libraries or trust-store edits.
-+
-+Place actual runtime libraries beside --program before running. An existing
-+OpenSSL CLI generates disposable certificates; Python ssl serves loopback TLS.
-+Trusted positive controls isolate hostname/expiry failures. A rejection counts
-+only with a certificate alert observed by the server, never a generic timeout.
-+"""
-+import argparse
-+from datetime import datetime, timedelta, timezone
-+import json
-+from pathlib import Path
-+import socket
-+import ssl
-+import subprocess
-+import threading
-+
-+
-+def main():
-+    ap = argparse.ArgumentParser()
-+    ap.add_argument('--program', type=Path, required=True)
-+    ap.add_argument('--openssl', type=Path, required=True)
-+    ap.add_argument('--backend', choices=['openssl', 'gnutls'], required=True)
-+    ap.add_argument('--output', type=Path, required=True)
-+    args = ap.parse_args()
-+    args.program, args.openssl = args.program.resolve(), args.openssl.resolve()
-+    root = args.output.resolve()
-+    root.mkdir(parents=True, exist_ok=False)
-+    rows = []
-+
-+    def command(*parts):
-+        p = subprocess.run([str(args.openssl), *map(str, parts)],
-+                           capture_output=True, text=True, timeout=30)
-+        if p.returncode:
-+            raise RuntimeError(p.stdout + p.stderr)
-+        return p.stdout.strip()
-+
-+    config = root / 'ca.conf'
-+    config.write_text('[req]\ndistinguished_name=dn\nx509_extensions=ca\nprompt=no\n'
-+                      '[dn]\nCN=FPC disposable smart TLS root\n[ca]\n'
-+                      'basicConstraints=critical,CA:TRUE\nkeyUsage=critical,keyCertSign,cRLSign\n')
-+    command('req', '-new', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '3',
-+            '-config', config, '-keyout', root / 'root.key', '-out', root / 'root.pem')
-+    command('req', '-new', '-newkey', 'rsa:2048', '-nodes', '-subj', '/CN=localhost',
-+            '-keyout', root / 'server.key', '-out', root / 'server.csr')
-+    for index, (name, san) in enumerate([('valid', 'DNS:localhost,IP:127.0.0.1'),
-+                                       ('wrong-dns', 'DNS:another.invalid')], 1):
-+        ext = root / (name + '.ext')
-+        ext.write_text('basicConstraints=critical,CA:FALSE\nkeyUsage=critical,digitalSignature,keyEncipherment\n'
-+                       'extendedKeyUsage=serverAuth\nsubjectAltName=' + san + '\n')
-+        command('x509', '-req', '-in', root / 'server.csr', '-CA', root / 'root.pem',
-+                '-CAkey', root / 'root.key', '-set_serial', index, '-days', '2',
-+                '-extfile', ext, '-out', root / (name + '.pem'))
-+    (root / 'index').write_text('')
-+    (root / 'serial').write_text('1000\n')
-+    config.write_text(f'[ca]\ndefault_ca=test\n[test]\ndir="{root.as_posix()}"\n'
-+                      'database=$dir/index\nserial=$dir/serial\nnew_certs_dir=$dir\n'
-+                      'certificate=$dir/root.pem\nprivate_key=$dir/root.key\ndefault_md=sha256\n'
-+                      'policy=policy\n[policy]\ncommonName=supplied\n')
-+    now = datetime.now(timezone.utc)
-+    command('ca', '-batch', '-notext', '-config', config, '-in', root / 'server.csr',
-+            '-extfile', root / 'valid.ext', '-startdate', (now-timedelta(days=2)).strftime('%Y%m%d%H%M%SZ'),
-+            '-enddate', (now-timedelta(days=1)).strftime('%Y%m%d%H%M%SZ'), '-out', root / 'expired.pem')
-+    # A second CA is never configured in the client.
-+    command('req', '-new', '-x509', '-newkey', 'rsa:2048', '-nodes', '-days', '2',
-+            '-subj', '/CN=Untrusted smart TLS root', '-keyout', root / 'untrusted.key',
-+            '-out', root / 'untrusted-root.pem')
-+    command('x509', '-req', '-in', root / 'server.csr', '-CA', root / 'untrusted-root.pem',
-+            '-CAkey', root / 'untrusted.key', '-set_serial', '10', '-days', '1',
-+            '-extfile', root / 'valid.ext', '-out', root / 'untrusted.pem')
-+
-+    def case(name, certificate='valid', verify='true', mode='pass', tls='tls12'):
-+        listener = socket.socket()
-+        listener.bind(('127.0.0.1', 0))
-+        listener.listen(1)
-+        listener.settimeout(8)
-+        observed = {'connections': 0, 'requests': 0}
-+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-+        version = ssl.TLSVersion.TLSv1_2 if tls == 'tls12' else ssl.TLSVersion.TLSv1_3
-+        context.minimum_version = context.maximum_version = version
-+        context.load_cert_chain(root / (certificate + '.pem'), root / 'server.key')
-+        count = 2 if mode == 'reuse' else 1
-+
-+        def serve():
-+            try:
-+                connection, _ = listener.accept()
-+                observed['connections'] += 1
-+                connection.settimeout(6)
-+                with context.wrap_socket(connection, server_side=True) as secure:
-+                    observed['protocol'] = secure.version()
-+                    pending = b''
-+                    for _ in range(count):
-+                        while b'\r\n\r\n' not in pending:
-+                            data = secure.recv(4096)
-+                            if not data:
-+                                return
-+                            pending += data
-+                        _, pending = pending.split(b'\r\n\r\n', 1)
-+                        observed['requests'] += 1
-+                        body = b'native tls fixture\n'
-+                        response = b'HTTP/1.1 200 OK\r\nContent-Length: '+str(len(body)).encode()+b'\r\nConnection: keep-alive\r\n\r\n'+body
-+                        for offset in range(0, len(response), 7):
-+                            secure.sendall(response[offset:offset+7])
-+                    # Existing external handlers send close_notify on closing.
-+                    secure.unwrap().close()
-+                    observed['client_close_notify'] = True
-+            except Exception as error:
-+                observed['error'] = type(error).__name__ + ': ' + str(error)
-+                if isinstance(error, ssl.SSLError):
-+                    observed['ssl_reason'] = error.reason
-+            finally:
-+                listener.close()
-+
-+        thread = threading.Thread(target=serve, daemon=True)
-+        thread.start()
-+        url = f'https://localhost:{listener.getsockname()[1]}/'
-+        p = subprocess.run([str(args.program), url, mode, verify, args.backend, str(root / 'root.pem')],
-+                           capture_output=True, text=True, timeout=20)
-+        thread.join(9)
-+        passed = p.returncode == 0 and 'PASS real smart HTTPS' in p.stdout and not thread.is_alive()
-+        if mode == 'reject':
-+            passed &= observed.get('ssl_reason') in {
-+                'SSLV3_ALERT_BAD_CERTIFICATE', 'SSLV3_ALERT_CERTIFICATE_EXPIRED',
-+                'TLSV1_ALERT_UNKNOWN_CA', 'SSLV3_ALERT_CERTIFICATE_UNKNOWN'}
-+            passed &= observed['requests'] == 0
-+        elif mode == 'veto':
-+            passed &= observed['requests'] == 0 and observed.get('protocol') == version.name.replace('TLSv1_', 'TLSv1.')
-+        else:
-+            passed &= observed['requests'] == count and observed['connections'] == 1
-+            passed &= observed.get('client_close_notify', False) and 'error' not in observed
-+        row = dict(case=name, real_tls=True, certificate=certificate, verify=verify,
-+                   returncode=p.returncode, passed=bool(passed), server=observed,
-+                   stdout=p.stdout, stderr=p.stderr)
-+        rows.append(row)
-+        (root / 'results.json').write_text(json.dumps(rows, indent=2)+'\n', encoding='utf-8')
-+        print(('PASS' if passed else 'FAIL'), name, flush=True)
-+        if not passed:
-+            print(p.stdout, p.stderr, observed, flush=True)
-+
-+    case('trusted-chain-hostname-true')
-+    case('trusted-chain-tls13', tls='tls13')
-+    case('trusted-wrong-hostname-rejected', certificate='wrong-dns', mode='reject')
-+    case('trusted-expired-rejected', certificate='expired', mode='reject')
-+    case('untrusted-root-rejected', certificate='untrusted', mode='reject')
-+    for verify in ['default', 'false']:
-+        for certificate in ['valid', 'wrong-dns', 'expired', 'untrusted']:
-+            case(certificate+'-verify-'+verify, certificate=certificate, verify=verify)
-+    case('handler-after-create-false', certificate='untrusted', mode='afterfalse')
-+    case('callback-veto-trusted', mode='veto')
-+    case('one-connection-two-requests', mode='reuse')
-+    passed = sum(row['passed'] for row in rows)
-+    (root / 'environment.json').write_text(json.dumps({
-+        'fixture_python_ssl': ssl.OPENSSL_VERSION, 'fixture_cli': command('version'),
-+        'backend': args.backend, 'program': str(args.program), 'passed': passed,
-+        'total': len(rows)}, indent=2)+'\n', encoding='utf-8')
-+    print(f'{passed}/{len(rows)} real external HTTPS cases passed')
-+    return passed != len(rows)
-+
-+
-+if __name__ == '__main__':
-+    raise SystemExit(main())
 diff --git a/packages/fcl-tls/tests/testsmarthttp.pp b/packages/fcl-tls/tests/testsmarthttp.pp
 new file mode 100644
-index 00000000..a2fc380c
+index 000000000..a2fc380cd
 --- /dev/null
 +++ b/packages/fcl-tls/tests/testsmarthttp.pp
 @@ -0,0 +1,91 @@
@@ -1433,244 +1036,9 @@ index 00000000..a2fc380c
 +    Writeln('PASS real smart HTTPS');
 +  except on E: Exception do begin Writeln(StdErr,E.Message); Halt(1) end end;
 +end.
-diff --git a/packages/fcl-tls/tests/testsmartmatrix.py b/packages/fcl-tls/tests/testsmartmatrix.py
-new file mode 100644
-index 00000000..2ee9f392
---- /dev/null
-+++ b/packages/fcl-tls/tests/testsmartmatrix.py
-@@ -0,0 +1,229 @@
-+#!/usr/bin/env python3
-+"""Fault-injection libraries test selection only; they never perform TLS.
-+
-+Run in fresh processes. Production clients use existing backend libraries;
-+these stub fixtures deliberately expose enough entry points to isolate faults.
-+"""
-+import argparse
-+import json
-+import os
-+import pathlib
-+import platform
-+import re
-+import shutil
-+import struct
-+import subprocess
-+import sys
-+
-+
-+def main():
-+    ap = argparse.ArgumentParser()
-+    ap.add_argument('--source', required=True)
-+    ap.add_argument('--output', required=True)
-+    ap.add_argument('--program', required=True)
-+    ap.add_argument('--compiler', required=True)
-+    ap.add_argument('--rtl', required=True)
-+    ap.add_argument('--sdk')
-+    args = ap.parse_args()
-+    source, out = pathlib.Path(args.source).resolve(), pathlib.Path(args.output).resolve()
-+    out.mkdir(parents=True, exist_ok=True)
-+    probe = (source / 'packages/fcl-tls/src/tlslibraryprobe.pp').read_text(encoding='utf-8')
-+    groups = re.findall(r'RequireProcs\([^;]+?\[([^]]+)\]\);', probe, re.S)
-+    assert len(groups) == 3
-+    crypto_names, ssl_names, gnu_names = [re.findall(r"'([^']+)'", group) for group in groups]
-+    ssl_names += ['SSL_get1_peer_certificate']
-+    # All legacy binding symbols avoid optional-load warnings in the Gnu fixture.
-+    gnu_names = sorted(set(gnu_names + re.findall(r"GPA\('([^']+)'\)",
-+        (source / 'packages/gnutls/src/gnutls.pp').read_text(encoding='utf-8'))))
-+    win, mac = sys.platform == 'win32', sys.platform == 'darwin'
-+    cpu = 'aarch64' if platform.machine().lower() in ['arm64', 'aarch64'] else 'x86_64'
-+    if win:
-+        ssl_name, crypto_name, gnu_name = 'libssl-3-x64.dll', 'libcrypto-3-x64.dll', 'libgnutls-30.dll'
-+    elif mac:
-+        ssl_name, crypto_name, gnu_name = 'libssl.3.dylib', 'libcrypto.3.dylib', 'libgnutls.30.dylib'
-+    else:
-+        ssl_name, crypto_name, gnu_name = 'libssl.so.3', 'libcrypto.so.3', 'libgnutls.so.30'
-+    built = out / 'mock-libraries'
-+    built.mkdir(exist_ok=True)
-+
-+    def build(kind, names, filename, variant='normal', omit=None):
-+        folder = built / variant
-+        folder.mkdir(exist_ok=True)
-+        names = [n for n in names if n != omit]
-+        if win:
-+            lines = ['library fixture;', '{$mode objfpc}{$H+}', 'uses ctypes;']
-+            if kind == 'ssl':
-+                lines += [f"function CryptoVersion: culong; cdecl; external '{crypto_name}' name 'OpenSSL_version_num';"]
-+            exports = []
-+            for i, name in enumerate(names):
-+                fn = 'F' + str(i)
-+                if name == 'OpenSSL_version_num':
-+                    value = '$10101000' if variant == 'mixed' else '$30000000'
-+                    lines += [f'function {fn}: culong; cdecl; begin Result:={value} end;']
-+                elif name == 'gnutls_check_version':
-+                    result = 'nil' if variant == 'oldgnu' else "'3.8.0'"
-+                    lines += [f'function {fn}(Minimum: PAnsiChar): PAnsiChar; cdecl; begin Result:={result} end;']
-+                elif name == 'TLS_method':
-+                    lines += [f'function {fn}: Pointer; cdecl; begin Result:=Pointer(PtrUInt(CryptoVersion())) end;']
-+                else:
-+                    lines += [f'function {fn}: PtrInt; cdecl; begin Result:=0 end;']
-+                exports.append(f"{fn} name '{name}'")
-+            lines += ['exports ' + ',\n'.join(exports) + ';', 'begin end.']
-+            code = folder / (kind + '.pp')
-+            code.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-+            cmd = [args.compiler, '-n', '-Fu' + args.rtl, '-FU' + str(folder),
-+                   '-FE' + str(folder), '-o' + filename, str(code)]
-+        else:
-+            lines = ['#include <stddef.h>', '#include <stdint.h>']
-+            if kind == 'ssl':
-+                lines += ['extern unsigned long OpenSSL_version_num(void);']
-+            for name in names:
-+                if name == 'OpenSSL_version_num':
-+                    value = '0x10101000UL' if variant == 'mixed' else '0x30000000UL'
-+                    lines += [f'unsigned long {name}(void) {{ return {value}; }}']
-+                elif name == 'gnutls_check_version':
-+                    value = 'NULL' if variant == 'oldgnu' else '"3.8.0"'
-+                    lines += [f'const char *{name}(const char *minimum) {{ return {value}; }}']
-+                elif name == 'TLS_method':
-+                    lines += [f'void *{name}(void) {{ return (void *)(uintptr_t)OpenSSL_version_num(); }}']
-+                else:
-+                    lines += [f'long {name}(void) {{ return 0; }}']
-+            code = folder / (kind + '.c')
-+            code.write_text('\n'.join(lines) + '\n', encoding='utf-8')
-+            cmd = ['cc', '-dynamiclib' if mac else '-shared', '-fPIC', str(code), '-o', str(folder / filename)]
-+            if mac:
-+                cmd += ['-Wl,-install_name,@rpath/' + filename, '-Wl,-rpath,@loader_path']
-+            if kind == 'ssl':
-+                cmd += [str(built / 'normal' / crypto_name)]
-+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=60)
-+        (folder / (kind + '-build.log')).write_text(p.stdout, encoding='utf-8')
-+        if p.returncode:
-+            raise RuntimeError('Mock fixture build failed: ' + p.stdout)
-+        return folder / filename
-+
-+    crypto = build('crypto', crypto_names, crypto_name)
-+    ssl = build('ssl', ssl_names, ssl_name)
-+    gnu = build('gnu', gnu_names, gnu_name)
-+    missing_ssl = build('ssl', ssl_names, ssl_name, 'missing', 'SSL_set1_host')
-+    mixed_crypto = build('crypto', crypto_names, crypto_name, 'mixed')
-+    old_gnu = build('gnu', gnu_names, gnu_name, 'oldgnu')
-+    cases = []
-+    native = 'schannel' if win else 'networkframework' if mac else 'error'
-+
-+    def case(name, files=(), expected=native, preference='auto', mode='', diagnostic='', preload=(), cwd=None, app_relative=None):
-+        folder = out / name
-+        folder.mkdir(exist_ok=True)
-+        app = folder / (app_relative or ('application.exe' if win else 'application'))
-+        app.parent.mkdir(parents=True, exist_ok=True)
-+        app.write_bytes(b'fixture application location only\n')
-+        for src, target in files:
-+            destination = folder / target
-+            destination.parent.mkdir(parents=True, exist_ok=True)
-+            shutil.copyfile(src, destination)
-+        cmd = [str(pathlib.Path(args.program).resolve()), str(app), expected, preference, mode, diagnostic, *map(str, preload)]
-+        p = subprocess.run(cmd, cwd=cwd or folder, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=30)
-+        row = {'case': name, 'fixture_only': True, 'expected': expected, 'preference': preference,
-+               'returncode': p.returncode, 'stdout': p.stdout, 'stderr': p.stderr}
-+        cases.append(row)
-+        print(('PASS' if p.returncode == 0 else 'FAIL'), name)
-+        return folder
-+
-+    both = [(ssl, ssl_name), (crypto, crypto_name)]
-+    with_gnu = both + [(gnu, gnu_name)]
-+    case('no-bundled-libraries')
-+    case('openssl-before-gnu', with_gnu, 'openssl')
-+    case('gnu-before-native', [(gnu, gnu_name)], 'gnutls')
-+    case('openssl-lib-directory', [(ssl, 'lib/' + ssl_name), (crypto, 'lib/' + crypto_name)], 'openssl')
-+    case('explicit-native-ignores-bundled', with_gnu, native, native)
-+    case('explicit-gnu-override', with_gnu, 'gnutls', 'gnutls')
-+    case('explicit-openssl-override', with_gnu, 'openssl', 'openssl')
-+    case('explicit-openssl-absent', [], 'error', 'openssl', diagnostic='absent')
-+    case('explicit-gnu-absent', [], 'error', 'gnutls', diagnostic='absent')
-+    case('partial-ssl', [(ssl, ssl_name), (gnu, gnu_name)], 'error', diagnostic='Incomplete')
-+    case('partial-crypto', [(crypto, crypto_name), (gnu, gnu_name)], 'error', diagnostic='Incomplete')
-+    case('split-pair-directories', [(ssl, ssl_name), (crypto, 'lib/' + crypto_name)], 'error', diagnostic='Incomplete')
-+    damaged = built / 'damaged'
-+    damaged.write_bytes(b'not a native library')
-+    case('damaged-pair', [(damaged, ssl_name), (crypto, crypto_name), (gnu, gnu_name)], 'error', diagnostic='Truncated')
-+    case('missing-hostname-symbol', [(missing_ssl, ssl_name), (crypto, crypto_name), (gnu, gnu_name)], 'error', diagnostic='SSL_set1_host')
-+    case('mixed-version-pair', [(ssl, ssl_name), (mixed_crypto, crypto_name)], 'error', diagnostic='mismatched')
-+    case('old-gnu-version', [(old_gnu, gnu_name)], 'error', diagnostic='3.6.0')
-+    case('gnu-false-true-local-adapter', [(gnu, gnu_name)], 'gnutls', mode='gnuverification')
-+    case('concurrent-native', mode='threads')
-+    case('concurrent-openssl', both, 'openssl', mode='threads')
-+    case('concurrent-gnu', [(gnu, gnu_name)], 'gnutls', mode='threads')
-+    case('preinitialized-openssl', both, 'error', mode='preopenssl', diagnostic='earlier', preload=[ssl, crypto])
-+    case('preinitialized-gnu', [(gnu, gnu_name)], 'error', mode='pregnu', diagnostic='earlier', preload=[gnu])
-+    case('destroyed-openssl-no-reload', both, 'openssl', mode='destroyed')
-+    case('freed-gnu-no-reload', [(gnu, gnu_name)], 'gnutls', mode='destroyed')
-+    wrong = built / ('wrong-' + ssl_name)
-+    data = bytearray(ssl.read_bytes())
-+    if win:
-+        offset = struct.unpack_from('<I', data, 60)[0]
-+        struct.pack_into('<H', data, offset + 4, 0x14c)
-+    elif mac:
-+        struct.pack_into('<I', data, 4, 0x0100000c if cpu == 'x86_64' else 0x01000007)
-+    else:
-+        struct.pack_into('<H', data, 18, 3)
-+    wrong.write_bytes(data)
-+    case('wrong-architecture', [(wrong, ssl_name), (crypto, crypto_name)], 'error', diagnostic='architecture')
-+    foreign = case('foreign-current-directory', both, 'openssl')
-+    case('current-directory-not-bundled', cwd=foreign)
-+    invalid_type = out / 'library-directory'
-+    (invalid_type / ssl_name).mkdir(parents=True, exist_ok=True)
-+    case('library-directory', [(crypto, crypto_name)], 'error', diagnostic='regular file')
-+    if win:
-+        junction = out / 'outside-junction'
-+        junction.mkdir(exist_ok=True)
-+        p = subprocess.run(['cmd.exe', '/c', 'mklink', '/J', str(junction/'lib'), str(built/'normal')],
-+                           capture_output=True, text=True, timeout=10)
-+        if p.returncode:
-+            raise RuntimeError('Junction fixture failed: '+p.stdout+p.stderr)
-+        case('outside-junction', expected='error', diagnostic='outside')
-+        wrong_import = built / ('wrong-import-'+ssl_name)
-+        original = ssl.read_bytes()
-+        assert original.count(crypto_name.encode()) == 1
-+        wrong_import.write_bytes(original.replace(crypto_name.encode(), crypto_name.replace('-3-', '-9-').encode()))
-+        case('mixed-import-pair', [(wrong_import, ssl_name), (crypto, crypto_name)], 'error', diagnostic='import pair mismatch')
-+    if mac:
-+        app_relative = 'Fixture.app/Contents/MacOS/application'
-+        case('mac-app-frameworks', [(ssl, 'Fixture.app/Contents/Frameworks/'+ssl_name),
-+             (crypto, 'Fixture.app/Contents/Frameworks/'+crypto_name)], 'openssl', app_relative=app_relative)
-+        case('mac-app-lib-gnu', [(gnu, 'Fixture.app/Contents/lib/'+gnu_name)],
-+             'gnutls', app_relative=app_relative)
-+        thin = ssl.read_bytes()
-+        cputype, subtype = struct.unpack_from('<II', thin, 4)
-+        def fat_image(name, fat64=False, architecture=None, invalid_bounds=False):
-+            magic = 0xcafebabf if fat64 else 0xcafebabe
-+            # Keep slices aligned for both Intel 4 KiB and Apple Silicon 16 KiB pages.
-+            offset = 16384
-+            size = len(thin) + (16384 if invalid_bounds else 0)
-+            entry = struct.pack('>IIQQII', architecture or cputype, subtype, offset, size, 14, 0) if fat64 else \
-+                    struct.pack('>IIIII', architecture or cputype, subtype, offset, size, 14)
-+            header = struct.pack('>II', magic, 1) + entry
-+            path = built / name
-+            path.write_bytes(header + b'\0' * (offset-len(header)) + thin)
-+            return path
-+        for fat64 in [False, True]:
-+            label = 'fat64' if fat64 else 'fat32'
-+            fat = fat_image(label, fat64=fat64)
-+            case('mach-'+label, [(fat, ssl_name), (crypto, crypto_name)], 'openssl')
-+        no_cpu = fat_image('fat-no-cpu', architecture=0x0100000c if cpu=='x86_64' else 0x01000007)
-+        case('mach-fat-missing-architecture', [(no_cpu, ssl_name), (crypto, crypto_name)],
-+             'error', diagnostic='matching Mach-O slice')
-+        bounds = fat_image('fat-invalid-bounds', invalid_bounds=True)
-+        case('mach-fat-invalid-bounds', [(bounds, ssl_name), (crypto, crypto_name)], 'error', diagnostic='bounds')
-+    if not win:
-+        folder = out / 'outside-symlink'
-+        folder.mkdir(exist_ok=True)
-+        (folder / ssl_name).symlink_to(ssl)
-+        (folder / crypto_name).symlink_to(crypto)
-+        case('outside-symlink', expected='error', diagnostic='outside')
-+    (out / 'results.json').write_text(json.dumps(cases, indent=2) + '\n', encoding='utf-8')
-+    failures = [row['case'] for row in cases if row['returncode']]
-+    print('RESULT', len(cases), 'selector cases;', len(failures), 'failed:', ','.join(failures))
-+    return bool(failures)
-+
-+
-+if __name__ == '__main__':
-+    sys.exit(main())
 diff --git a/packages/fcl-tls/tests/testsmartnative.pp b/packages/fcl-tls/tests/testsmartnative.pp
 new file mode 100644
-index 00000000..79435c8c
+index 000000000..79435c8c6
 --- /dev/null
 +++ b/packages/fcl-tls/tests/testsmartnative.pp
 @@ -0,0 +1,237 @@
@@ -1913,11 +1281,11 @@ index 00000000..79435c8c
 +end.
 diff --git a/packages/fcl-tls/tests/testsmartnetworkhttp.pp b/packages/fcl-tls/tests/testsmartnetworkhttp.pp
 new file mode 100644
-index 00000000..4308e8f1
+index 000000000..258ab3d05
 --- /dev/null
 +++ b/packages/fcl-tls/tests/testsmartnetworkhttp.pp
 @@ -0,0 +1,113 @@
-+{ Real macOS HTTP acceptance harness. Run with the sibling Python fixture.
++{ Real macOS HTTP acceptance harness.
 +  Requires cthreads first, native provider and diagnostic counters. }
 +program testsmartnetworkhttp;
 +{$mode objfpc}{$H+}
@@ -2032,7 +1400,7 @@ index 00000000..4308e8f1
 +end.
 diff --git a/packages/fcl-tls/tests/testsmartselection.pp b/packages/fcl-tls/tests/testsmartselection.pp
 new file mode 100644
-index 00000000..c7b48d3c
+index 000000000..c7b48d3c5
 --- /dev/null
 +++ b/packages/fcl-tls/tests/testsmartselection.pp
 @@ -0,0 +1,138 @@
@@ -2175,7 +1543,7 @@ index 00000000..c7b48d3c
 +  end;
 +end.
 diff --git a/packages/fpmake_add.inc b/packages/fpmake_add.inc
-index 16080076..f1c0bf91 100644
+index 16080076c..f1c0bf91a 100644
 --- a/packages/fpmake_add.inc
 +++ b/packages/fpmake_add.inc
 @@ -177,3 +177,5 @@
@@ -2185,7 +1553,7 @@ index 16080076..f1c0bf91 100644
 +
 +  add_fcl_tls(ADirectory+IncludeTrailingPathDelimiter('fcl-tls'));
 diff --git a/packages/fpmake_proc.inc b/packages/fpmake_proc.inc
-index 835d3d6d..52d913a4 100644
+index 835d3d6da..52d913a48 100644
 --- a/packages/fpmake_proc.inc
 +++ b/packages/fpmake_proc.inc
 @@ -999,3 +999,9 @@ procedure add_fcl_svg(const ADirectory: string);
@@ -2199,7 +1567,7 @@ index 835d3d6d..52d913a4 100644
 +{$include fcl-tls/fpmake.pp}
 +end;
 diff --git a/packages/gnutls/src/gnutls.pp b/packages/gnutls/src/gnutls.pp
-index ac61414d..b09d6295 100644
+index ac61414d0..b09d62957 100644
 --- a/packages/gnutls/src/gnutls.pp
 +++ b/packages/gnutls/src/gnutls.pp
 @@ -2327,6 +2327,9 @@ function gnutls_x509_crl_get_certificate (crl:Tgnutls_x509_crl_t; indx:longint;
@@ -2287,7 +1655,7 @@ index ac61414d..b09d6295 100644
 +  during other units' finalization; no new automatic library unload. }
  end.
 diff --git a/packages/gnutls/src/gnutlssockets.pp b/packages/gnutls/src/gnutlssockets.pp
-index 83a2a63b..0490966c 100644
+index 83a2a63bf..0490966c0 100644
 --- a/packages/gnutls/src/gnutlssockets.pp
 +++ b/packages/gnutls/src/gnutlssockets.pp
 @@ -45,6 +45,9 @@ interface
@@ -2322,7 +1690,7 @@ index 83a2a63b..0490966c 100644
    if Not Result then
      exit;
 diff --git a/packages/openssl/src/openssl.pas b/packages/openssl/src/openssl.pas
-index bb373449..c757615e 100644
+index bb3734492..c757615e8 100644
 --- a/packages/openssl/src/openssl.pas
 +++ b/packages/openssl/src/openssl.pas
 @@ -1563,6 +1563,9 @@     stack_st_PKCS7 = record
