@@ -1,162 +1,113 @@
 {
-  "base_repository": "https://gitlab.com/ACTom/source",
-  "base_commit": "56900cd3a58b32cf3c0f8a3b48443a139bab8e0d",
-  "source_branch": "feature/native-tls-smart-sockets",
-  "patch_sha256": "d81c7667b59aaf40a85e4081ffb9899e61259ce4baa3abde6ee0c24811816422",
-  "scope": "Windows Schannel/selector; pure Pascal Network.framework plus HTTP seam, Darwin build/link and real TLS observed; strict FIN unresolved",
-  "windows_validation": {
-    "package_build_exit": 0,
-    "real_local_tls_cases": 87,
-    "native_online_exit": 1,
-    "native_online_failure": "expired.badssl.com early TCP truncation; not counted as certificate rejection",
-    "network_framework_pascal_model_cases": 20,
-    "standalone_model_bootstrap": "FPC 3.2.2 Windows passed; not Darwin/whole-branch evidence",
-    "http_connection_model_checks": 46,
-    "native_handler_model_checks": 22,
-    "native_state_model_unfreed_blocks": 0,
-    "current_evidence": "packages-http-framing.log; http-framing-integrated/results.log; http-framing-loader-retained.log",
-    "latest_package_build_exit": 0,
-    "latest_offline_runner_exit": 1,
-    "latest_offline_failure": "TemporaryDirectory cleanup WinError5 after all87 local TLS and17 loader checks passed",
-    "targeted_loader_exit": 0,
-    "targeted_loader_checks": 17,
-    "targeted_binding_initializers": 50,
-    "prior_all_pass_evidence": "pure-pascal-integrated-native/results.log; packages-pure-pascal-full.log",
-    "prior_offline_runner_exit": 0
-  },
-  "not_run": [
-    "real GnuTLS",
-    "OpenSSL1.1.1",
-    "Win32/ARM64/older Windows/Schannel TLS1.3",
-    "older macOS runtime, Darwin sanitizer/leaks beyond context counters",
-    "strict Network.framework bare-FIN rejection unresolved"
-  ],
-  "ci_orchestration": "ACTom/fpc-macos-ci only; excluded from FPC source patch",
-  "first_ci_scope": "two standard macOS jobs, manual, 15min each; API and production C construction only, no TCP/TLS access; authorized once",
-  "macos_preflight": {
-    "run_id": 37319310587,
-    "tested_carrier_commit": "57c74fec6a0ff35c8cc93ee1a7702b20db793b95",
-    "overall": "failure",
-    "architectures": [
-      "x86_64",
-      "arm64"
-    ],
-    "macos": "15.7.9",
-    "sdk": "15.5",
-    "clang": "17.0.0",
-    "passed": [
-      "exact-base patch applicability",
-      "Apple API/Blocks construction",
-      "production C bridge object compilation"
-    ],
-    "failure": "native C harness -Wstring-plus-int under -Werror; named-array correction prepared, not rerun",
-    "fpc_bootstrap": "absent on both runners",
-    "native_tls_runtime": "not run",
-    "historical_only": "This earlier C-only run does not validate the current pure Pascal payload"
-  },
-  "next_ci_scope": "Within owner-authorized total 20 rounds; two standard macOS runners, each <=30min; diagnosis before repeat",
-  "pure_pascal_preflight": {
-    "run_id": 37332944563,
-    "tested_carrier_commit": "a870a1e2793b886660557e9572489478ef6b6ec5",
-    "tested_patch_sha256": "fbb3f5b5cac2fe3ced1938474a2d7a759ef610d4d4478031a7e8171a6b62e17a",
-    "overall": "failure",
-    "architectures": [
-      "x86_64",
-      "arm64"
-    ],
-    "macos": "15.7.9",
-    "xcode": "16.4",
-    "passed": [
-      "fixed-base patch applicability",
-      "official DMG download/image validation",
-      "pkgutil extraction/compiler+RTL inventory"
-    ],
-    "observed_dmg_sha256": "05d4510c8c887e3c68de20272abf62171aa5b2ef1eba6bce25e4c0bc41ba8b7d",
-    "failure": "bootstrap script lipo input/verify_arch argument order",
-    "not_run": [
-      "compiler version/target query",
-      "bootstrap hello",
-      "compiler cycle/RTL",
-      "Blocks tests",
-      "pure Pascal native compile/link/construction/imports",
-      "package/model integration",
-      "native TLS"
-    ],
-    "fix": "lipo input path before -verify_arch; validated by subsequent bootstrap hello and branch builds on both architectures",
-    "authorized_dispatches": 1
-  },
-  "ci_limit": {
-    "counting": "unique workflow ID summed run_attempt, matrix once",
-    "maximum": 20,
-    "owner_authorized": true,
-    "used": 7,
-    "all_run_attempts": 1,
-    "latest_run_id": 37345498651
-  },
-  "darwin_rounds": [
+  "base_repository": "https://gitlab.com/freepascal.org/fpc/source",
+  "base_commit": "2ec3f7a440e3c7b80cba4f7d2a7814c7bb36947b",
+  "source_branch": "feature/networkframework-peer-minimal",
+  "foundation_tree": "76792bdb90654582689682e4059e96a221cc1082",
+  "final_tree": "d2dbf7bbee4c0d7ce1d11981c27c9c221d20474e",
+  "patch_sha256": "5de28ee44d4ff57d11a47b6385486440a22abe25f9e0aa4686e74ad67982b9f2",
+  "files": [
     {
-      "round": 3,
-      "run_id": 37336482398,
-      "carrier_commit": "f776a35da947a2c2b59dfabb43b696a2cd0466d7",
-      "both_architectures": "bootstrap hello, compiler/RTL and Blocks pass; native Assigned(cblock) compilation fails"
+      "path": "packages/fcl-net/docs/client-peers.md",
+      "sha256": "dd9d241ef4a6714b0ba5bb5c0792b3841d4803f91d8a50ecd37562a35400aaba"
     },
     {
-      "round": 4,
-      "run_id": 37338838447,
-      "carrier_commit": "2770bcdabbf8f3b449261f9303ac1d90d0a70479",
-      "both_architectures": "native compile/construction/imports/all packages pass; standalone include path fail"
+      "path": "packages/fcl-net/namespaced/System.Net.ClientPeers.pp",
+      "sha256": "2110d860b03301f4fb1b20f555f15f85e1296a185065b76b138d901de6a6154b"
     },
     {
-      "round": 5,
-      "run_id": 37340068774,
-      "carrier_commit": "3a8cf603f614ed62418ed4ef02b702fc99bd150b",
-      "both_architectures": {
-        "build_models_race": "pass",
-        "tls_cases": 48,
-        "passed": 39,
-        "failed": 9
-      },
-      "diagnosis": "7 harness assertions corrected; 2 genuine bare-FIN failures"
+      "path": "packages/fcl-net/namespaced/System.Net.NetworkFrameworkAPI.pp",
+      "sha256": "9439f3ac68c05943b0396b61e663f8a501fe3fab7430eec38e74f6a5f55ee70b"
     },
     {
-      "round": 6,
-      "run_id": 37341698834,
-      "carrier_commit": "17895de7599c1c2f73bb5deab7ff65f605f0e566",
-      "both_architectures": {
-        "build_models_race": "pass",
-        "tls_cases": 52,
-        "passed": 50,
-        "failed": 2
-      },
-      "failed_cases": [
-        "tls12-fin",
-        "tls13-fin"
-      ]
+      "path": "packages/fcl-net/namespaced/System.Net.NetworkFrameworkNative.pp",
+      "sha256": "87e81a33489cd2a2e2da52ae1ea329f67b6c1f72b5242c640297163456418431"
     },
     {
-      "round": 7,
-      "run_id": 37345498651,
-      "carrier_commit": "aeab39ed6134f5078a2f02e2c05bc474e4ca7198",
-      "tested_patch_sha256": "2368ca71688b9c30363ab2d6589f7ebe3bc9a1471e3011760a4cfe930f0a2412",
-      "both_architectures": {
-        "build_models_race": "pass",
-        "tls_cases": 58,
-        "passed": 56,
-        "failed": 2,
-        "diagnostic_only": 4
-      },
-      "failed_cases": [
-        "tls12-fin",
-        "tls13-fin"
-      ],
-      "http_framing_cases": 6,
-      "closure_observation": "proper close_notify and bare FIN have matching terminal callback fields and repeated Read EOF at500ms; no reliable closure-alert distinction observed"
+      "path": "packages/fcl-net/namespaced/System.Net.NetworkFrameworkSSLSockets.pp",
+      "sha256": "82aa3167f2678e1f40717657a17aa25dab8ac229dc6995b3e4f47751cb821775"
+    },
+    {
+      "path": "packages/fcl-net/src/clientpeers.pp",
+      "sha256": "97b166da205e00f08c0d88962dec85b01a843dd4003e6095f0024d088843c60c"
+    },
+    {
+      "path": "packages/fcl-net/src/networkframeworkapi.pp",
+      "sha256": "8aa179a7c12ead282d5daa9e35ed91f39ca3db0ff824541ab09da9172ae9aef5"
+    },
+    {
+      "path": "packages/fcl-net/src/networkframeworknative.pp",
+      "sha256": "50e5a47b64cbef8b610d37ba35a6724d87ce26fe17905f70e45692ff47f00f4b"
+    },
+    {
+      "path": "packages/fcl-net/src/networkframeworksslsockets.pp",
+      "sha256": "55573ea67524ec6d9523817000b32837edb23e6887231c9069883d6161843681"
+    },
+    {
+      "path": "packages/fcl-net/tests/networkframework/README.md",
+      "sha256": "6f14796f653f57edb957030a63a331931ae696c28a925315a938b6109b0ffbe7"
+    },
+    {
+      "path": "packages/fcl-net/tests/networkframework/networkframeworkmodel.inc",
+      "sha256": "0ea2589231bd3ffa39445f3e14a6409627d1420748d85c431f78eaa7d8f7bf2b"
+    },
+    {
+      "path": "packages/fcl-net/tests/networkframework/run.sh",
+      "sha256": "b1676a423279b7ec416a039245daca4124fb277c69c156f34053f467342f735e"
+    },
+    {
+      "path": "packages/fcl-net/tests/networkframework/testnetworkhttp.pp",
+      "sha256": "76737d629b0a251b599786c0ad6009458d299111fabce11118ad6a56c2a8ef36"
+    },
+    {
+      "path": "packages/fcl-net/tests/networkframework/testnetworknative.pp",
+      "sha256": "b22eb39c7fb9ce06bb45d2fa2153b8135e2664c32557775507bb7c90e6ca2d14"
+    },
+    {
+      "path": "packages/fcl-net/tests/networkframework/testnetworkpeer.pp",
+      "sha256": "174f2bc120c5850d5c348a3c62712914780b9874002a35d4b3faa1eb4380eac5"
+    },
+    {
+      "path": "packages/fcl-net/tests/networkframework/testnetworktls.py",
+      "sha256": "f763652ace8fb9c8de62375c953ac150d27500ab0c1422d678358531f101c9d6"
+    },
+    {
+      "path": "packages/fcl-web/tests/testclientpeer.pp",
+      "sha256": "512bcd0af9e787638d2044df9867febd29494f6cc5340b1f4df6017ae914802c"
+    },
+    {
+      "path": "packages/fcl-web/tests/testsocketpeer.pp",
+      "sha256": "c90b50c299b9ec440018031021f6ed8fd77955febd74f573ce05f439ecfee4de"
+    },
+    {
+      "path": "packages/fcl-net/fpmake.pp",
+      "sha256": "6895fb02ef395bea2816f0a613a658d7f0875a431a88ac12786608a762ef12af"
+    },
+    {
+      "path": "packages/fcl-net/namespaces.lst",
+      "sha256": "759e126d6be79e8701ce225debb0f4f7b3cb5cabfb4309eb907e5493e15038ae"
+    },
+    {
+      "path": "packages/fcl-net/src/sslsockets.pp",
+      "sha256": "d68338d52b2a3bbb9b005a2029339969e61685b56d087b6d27b0939370f925ac"
+    },
+    {
+      "path": "packages/fcl-web/src/base/fphttpclient.pp",
+      "sha256": "f37f756f002818e0aa017c04ba6eccb9b6ac04305233875029fbf08531d050bd"
     }
   ],
-  "pending_owner_decision": "Network.framework with strict framed-HTTP requirement and raw EOF limitation; Windows/selector delivery with Mac experimental; or separate Secure Transport evaluation",
-  "delivery_evidence": {
-    "latest_tested_carrier_commit": "aeab39ed6134f5078a2f02e2c05bc474e4ca7198",
-    "latest_tested_patch_sha256": "2368ca71688b9c30363ab2d6589f7ebe3bc9a1471e3011760a4cfe930f0a2412",
-    "changes_after_latest_test": "evidence documentation and opening source comments only; production statements and tests unchanged; no extra dispatch needed"
+  "patches": {
+    "0001-client-peer-hook.patch": "29a3aaeb040788794edc5e5581cd50d36c298d2382ac768e91827ed674b45fb7",
+    "0002-networkframework-peer.patch": "02050bf23f7b89525d8e4b92e4c74eab0d25b62b045e7a9432442ec980360b21"
+  },
+  "scope": "Minimal pre-TCP client peer hook and pure Pascal Network.framework client; no selector or HTTP framing changes",
+  "windows_validation": {
+    "standard_packages": "passed",
+    "dotted_packages": "passed",
+    "http_peer_assertions": 26,
+    "real_socket_standard_and_dotted": "passed",
+    "native_shared_models": "passed; not Apple runtime evidence",
+    "peer_construction_standard_and_dotted": "passed; no connection started",
+    "schannel_standard_regression": "42/42",
+    "schannel_dotted_regression": "41/42: public untrusted-root timeout; later comparative control passed for all three clients"
   }
 }

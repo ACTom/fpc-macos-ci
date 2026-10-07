@@ -1,7 +1,9 @@
 # FPC macOS native TLS test carrier
 
-This repository carries a reviewed patch against FPC commit
-56900cd3a58b32cf3c0f8a3b48443a139bab8e0d and manual CI orchestration.
+Current payload: a minimal peer-hook + pure Pascal Network.framework patch against
+FPC official main 2ec3f7a440e3c7b80cba4f7d2a7814c7bb36947b. Historical
+records below concern the preserved full prototype and are not evidence for this
+new interface. CI orchestration remains separate from the FPC patch.
 It does not mirror FPC history or publish an upstream PR. Production code is
 pure Pascal; no C bridge or CI workflow is included in the FPC source patch.
 
@@ -17,7 +19,7 @@ extracted by pkgutil into RUNNER_TEMP and unmounted without executing installer
 scripts. No global installation or trust-store change occurs. The native
 bootstrap hello is followed by the pinned branch compiler cycle/RTL, three
 Blocks ABI programs, native provider compilation/construction, Mach-O audit,
-complete package build, portable models, selector race and real TLS acceptance.
+complete package build, portable HTTP contract and real peer/TLS acceptance.
 Existing Python ssl/OpenSSL are only fixture servers/certificate tools; native
 Pascal clients assert no third-party TLS binding is loaded.
 

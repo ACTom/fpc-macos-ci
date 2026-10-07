@@ -47,7 +47,7 @@ jobs:
           base="$(python3 -c 'import json; print(json.load(open("payload/manifest.json"))["base_commit"])')"
           mkdir -p "$RUNNER_TEMP/fpc-source"
           curl --fail --location --retry 1 --connect-timeout 20 --max-time 180 \
-            "https://gitlab.com/ACTom/source/-/archive/$base/source-$base.tar.gz" \
+            "https://gitlab.com/freepascal.org/fpc/source/-/archive/$base/source-$base.tar.gz" \
             --output "$RUNNER_TEMP/fpc-source.tar.gz"
           tar -xzf "$RUNNER_TEMP/fpc-source.tar.gz" --strip-components=1 -C "$RUNNER_TEMP/fpc-source"
           cd "$RUNNER_TEMP/fpc-source"

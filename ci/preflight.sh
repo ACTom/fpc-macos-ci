@@ -64,13 +64,12 @@ test -x "$compiler"
 test "$("$compiler" -iV)" = 3.3.1
 unit_root="$source_dir/rtl/units/$cpu-darwin"
 test -f "$unit_root/system.ppu"
-options=(-n -gl -dFPC_NETWORK_FRAMEWORK_NATIVE -dFPC_NETWORKFRAMEWORK_DIAGNOSTICS "-XR$sdk" "-WM$minimum" "-FD$tools_dir" "-Fu$unit_root"
-  "-Fu$source_dir/packages/fcl-net/src" "-Fu$source_dir/packages/fcl-tls/src"
+options=(-n -gl -dFPC_NETWORKFRAMEWORK_DIAGNOSTICS "-XR$sdk" "-WM$minimum" "-FD$tools_dir" "-Fu$unit_root"
+  "-Fu$source_dir/packages/fcl-net/src"
   "-Fu$source_dir/packages/fcl-web/src/base" "-Fu$source_dir/packages/fcl-base/src"
   "-Fu$source_dir/packages/rtl-objpas/src/inc" "-Fu$source_dir/packages/rtl-extra/src/unix"
   "-Fu$source_dir/packages/rtl-extra/src/darwin" "-Fu$source_dir/packages/rtl-extra/src/bsd"
-  "-Fu$source_dir/packages/openssl/src" "-Fu$source_dir/packages/gnutls/src"
-  "-Fi$source_dir/packages/fcl-net/src/unix" "-Fi$source_dir/packages/rtl-extra/src/inc"
+  "-Fi$source_dir/packages/fcl-net/src/unix" "-Fi$source_dir/packages/fcl-net/tests/networkframework" "-Fi$source_dir/packages/rtl-extra/src/inc"
   "-Fi$source_dir/packages/rtl-extra/src/bsd" "-Fi$source_dir/packages/rtl-extra/src/unix" "-Fi$source_dir/packages/rtl-extra/src/darwin"
   "-FU$output_dir" "-FE$output_dir")
 # The branch's own global/object-method Blocks ABI checks.
@@ -81,7 +80,7 @@ for program in tblock1 tblock2 tblock2a; do
   stage "blocks-$program-run" "$output_dir/$program/$program"
 done
 # Establish the native compiler/Blocks/link boundary before building FCL packages.
-stage native-compile "$compiler" "${options[@]}" "$source_dir/packages/fcl-tls/tests/macos/testnetworknative.pp"
+stage native-compile "$compiler" "${options[@]}" "$source_dir/packages/fcl-net/tests/networkframework/testnetworknative.pp"
 stage native-construction "$output_dir/testnetworknative"
 echo "STAGE native-imports RUN"
 otool -L "$output_dir/testnetworknative" | tee "$output_dir/native-imports.txt"
@@ -109,12 +108,15 @@ print('PASS no strong Network/Security or third-party TLS imports; minimum deplo
 print('Blocks imports and old-system runtime still require review/real execution')
 PY
 echo "STAGE native-imports PASS"
-stage packages make -C "$source_dir/packages" all -j4 "FPC=$compiler" "FPMAKEOPT=-T 4 -sap -o '-XR$sdk -dFPC_NETWORK_FRAMEWORK_NATIVE'" "OPT=-XR$sdk"
-for program in testpolicy testfactory testnetworkstream testhttpconnection testnetworkhandler testsmart; do
-  stage "$program-compile" "$compiler" "${options[@]}" "$source_dir/packages/fcl-tls/tests/$program.pp"
+stage packages make -C "$source_dir/packages" all -j4 "FPC=$compiler" "FPMAKEOPT=-T 4 -sap -o '-XR$sdk'" "OPT=-XR$sdk"
+for program in testclientpeer testsocketpeer; do
+  stage "$program-compile" "$compiler" "${options[@]}" "$source_dir/packages/fcl-web/tests/$program.pp"
 done
-for program in testpolicy testfactory testnetworkstream testhttpconnection testnetworkhandler; do stage "$program-run" "$output_dir/$program"; done
-stage native-selector-race "$output_dir/testsmart" race
-stage native-http-compile "$compiler" "${options[@]}" "$source_dir/packages/fcl-tls/tests/macos/testnetworkhttp.pp"
-stage native-tls-acceptance python3 "$source_dir/packages/fcl-tls/tests/macos/testnetworktls.py" "$output_dir/testnetworknative" "$output_dir/testnetworkhttp" "$output_dir/tls-fixtures"
-echo 'PASS native build/models/TLS acceptance; see per-case results and context counters'
+stage http-peer-model "$output_dir/testclientpeer"
+stage real-socket-regression python3 "$GITHUB_WORKSPACE/ci/run_socket_test.py" "$output_dir/testsocketpeer"
+for program in testnetworkhttp testnetworkpeer; do
+  stage "$program-compile" "$compiler" "${options[@]}" "$source_dir/packages/fcl-net/tests/networkframework/$program.pp"
+done
+stage public-peer-construction "$output_dir/testnetworkpeer"
+stage native-tls-acceptance python3 "$source_dir/packages/fcl-net/tests/networkframework/testnetworktls.py" "$output_dir/testnetworknative" "$output_dir/testnetworkhttp" "$output_dir/tls-fixtures" --peer "$output_dir/testnetworkpeer"
+echo 'PASS minimal peer build/HTTP contract/native TLS acceptance; see every result and counter'
