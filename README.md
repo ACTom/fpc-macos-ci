@@ -23,6 +23,20 @@ complete package build, portable HTTP contract and real peer/TLS acceptance.
 Existing Python ssl/OpenSSL are only fixture servers/certificate tools; native
 Pascal clients assert no third-party TLS binding is loaded.
 
+## Minimal peer run
+
+[Run8](https://github.com/ACTom/fpc-macos-ci/actions/runs/37601884389), carrier
+279df05e25650befd685d1ee3e6d5910819a6675, compiled the new interface and all
+packages on both architectures, with Blocks/import/deployment/socket/ownership
+checks passed. Intel passed all72 result rows (68 acceptance +4 EOF observations).
+ARM passed71/72; only TLS1.3 reset failed at Connect with POSIX54 because the
+server reset immediately after its handshake, before the client had published
+ready. No production backend change is needed for that valid early-reset error.
+The next payload keeps the assertion that Read must report reset as an error and
+synchronizes the fixture on a flushed client-native-ready marker. Only two test
+files change; no result or expectation is weakened. The original run8 results
+remain retained. Usage is8/20 before any next dispatch.
+
 ## Recorded runs
 
 | Workflow | Both-architecture outcome |

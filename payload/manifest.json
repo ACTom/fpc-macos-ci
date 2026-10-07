@@ -3,8 +3,8 @@
   "base_commit": "2ec3f7a440e3c7b80cba4f7d2a7814c7bb36947b",
   "source_branch": "feature/networkframework-peer-minimal",
   "foundation_tree": "76792bdb90654582689682e4059e96a221cc1082",
-  "final_tree": "d2dbf7bbee4c0d7ce1d11981c27c9c221d20474e",
-  "patch_sha256": "5de28ee44d4ff57d11a47b6385486440a22abe25f9e0aa4686e74ad67982b9f2",
+  "final_tree": "63682b3898f486fbb0dc6eb41cac167a413214d3",
+  "patch_sha256": "64f1eb1e6f0e8a3f31909f630ba3d7651a2c55dee35d53aa8684a28fa8c4c444",
   "files": [
     {
       "path": "packages/fcl-net/docs/client-peers.md",
@@ -60,7 +60,7 @@
     },
     {
       "path": "packages/fcl-net/tests/networkframework/testnetworknative.pp",
-      "sha256": "b22eb39c7fb9ce06bb45d2fa2153b8135e2664c32557775507bb7c90e6ca2d14"
+      "sha256": "c6b84dee02a2b6c43810dbd731dd01b5f9555313047e06ed20f8b642d33d1335"
     },
     {
       "path": "packages/fcl-net/tests/networkframework/testnetworkpeer.pp",
@@ -68,7 +68,7 @@
     },
     {
       "path": "packages/fcl-net/tests/networkframework/testnetworktls.py",
-      "sha256": "f763652ace8fb9c8de62375c953ac150d27500ab0c1422d678358531f101c9d6"
+      "sha256": "c20eb523ad5bb8959148ea677dc4d0723ba1063cdd5933c05ec8200e997b4df8"
     },
     {
       "path": "packages/fcl-web/tests/testclientpeer.pp",
@@ -97,7 +97,7 @@
   ],
   "patches": {
     "0001-client-peer-hook.patch": "29a3aaeb040788794edc5e5581cd50d36c298d2382ac768e91827ed674b45fb7",
-    "0002-networkframework-peer.patch": "02050bf23f7b89525d8e4b92e4c74eab0d25b62b045e7a9432442ec980360b21"
+    "0002-networkframework-peer.patch": "1a657102dad43dcebbc5a9004d3e4f438a772c1490c254329721608367e08190"
   },
   "scope": "Minimal pre-TCP client peer hook and pure Pascal Network.framework client; no selector or HTTP framing changes",
   "windows_validation": {
