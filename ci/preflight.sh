@@ -127,6 +127,7 @@ runner_options+=("-Fu$source_dir/packages/fcl-web/src/base" "-Fu$source_dir/pack
   "-Fu$source_dir/packages/fcl-jsonschema/src" "-Fi$source_dir/packages/fcl-net/src/unix")
 # Run the new Unix-route cases against the exact previous HTTP implementation.
 # Only this temporary copy is reverted; the tested final source stays unchanged.
+# A test-only unit name prevents resolving to the final package's PPU or object.
 before_dir="$output_dir/http-runner-before"
 mkdir "$before_dir"
 python3 - "$source_dir" "$before_dir" <<'PY'
@@ -141,15 +142,25 @@ shutil.copyfile(source/regression['path'], target)
 subprocess.run(['git', 'apply', '--check', '-'], input=regression['reverse_patch'].encode(), cwd=before, check=True)
 subprocess.run(['git', 'apply', '-'], input=regression['reverse_patch'].encode(), cwd=before, check=True)
 assert hashlib.sha256(target.read_bytes()).hexdigest() == regression['prior_source_sha256']
+previous = target.read_text()
+assert previous.count('unit fpHTTPClient;') == 1
+aliased = previous.replace('unit fpHTTPClient;', 'unit fphttpclient_before;')
+assert aliased.replace('unit fphttpclient_before;', 'unit fpHTTPClient;') == previous
+(before/'fphttpclient_before.pp').write_text(aliased)
 for name in ['testfpweb.lpr', 'tcclientpeer.pp']:
     shutil.copyfile(source/'packages/fcl-web/tests'/name, before/name)
+test_unit = before/'tcclientpeer.pp'
+tests = test_unit.read_text()
+assert tests.count('clientpeers, fphttpclient;') == 1
+test_unit.write_text(tests.replace('clientpeers, fphttpclient;', 'clientpeers, fphttpclient_before;'))
 print('PASS exact previous HTTP source', regression['prior_commit'], regression['prior_source_sha256'])
+print('PASS previous HTTP unit uses a test-only name; its implementation and test assertions are unchanged')
 PY
 before_options=("-Fu$before_dir" "${runner_options[@]}" "-Fu$source_dir/packages/fcl-web/tests" "-FU$before_dir" "-FE$before_dir")
 compile_previous_http() {
   (cd "$before_dir"; "$compiler" "${before_options[@]}" "$@")
 }
-stage http-unix-before-unit-compile compile_previous_http "$before_dir/packages/fcl-web/src/base/fphttpclient.pp"
+stage http-unix-before-unit-compile compile_previous_http "$before_dir/fphttpclient_before.pp"
 stage http-unix-before-runner-compile compile_previous_http "$before_dir/testfpweb.lpr"
 echo 'STAGE http-unix-regression-before RUN'
 before_status=0
