@@ -125,6 +125,43 @@ done
 runner_options+=("-Fu$source_dir/packages/fcl-web/src/base" "-Fu$source_dir/packages/fcl-web/src/jwt"
   "-Fu$source_dir/packages/fcl-web/src/restbridge" "-Fu$source_dir/packages/fcl-openapi/src"
   "-Fu$source_dir/packages/fcl-jsonschema/src" "-Fi$source_dir/packages/fcl-net/src/unix")
+# Run the new Unix-route cases against the exact previous HTTP implementation.
+# Only this temporary copy is reverted; the tested final source stays unchanged.
+before_dir="$output_dir/http-runner-before"
+mkdir "$before_dir"
+python3 - "$source_dir" "$before_dir" <<'PY'
+from pathlib import Path
+import hashlib, json, os, shutil, subprocess, sys
+source, before = map(Path, sys.argv[1:])
+manifest = json.loads((Path(os.environ['GITHUB_WORKSPACE'])/'payload/manifest.json').read_text())
+regression = manifest['unix_route_regression']
+target = before/regression['path']
+target.parent.mkdir(parents=True)
+shutil.copyfile(source/regression['path'], target)
+subprocess.run(['git', 'apply', '--check', '-'], input=regression['reverse_patch'].encode(), cwd=before, check=True)
+subprocess.run(['git', 'apply', '-'], input=regression['reverse_patch'].encode(), cwd=before, check=True)
+assert hashlib.sha256(target.read_bytes()).hexdigest() == regression['prior_source_sha256']
+print('PASS exact previous HTTP source', regression['prior_commit'], regression['prior_source_sha256'])
+PY
+before_options=("-Fu$before_dir" "${runner_options[@]}" "-FU$before_dir" "-FE$before_dir")
+stage http-unix-before-unit-compile "$compiler" "${before_options[@]}" "$before_dir/packages/fcl-web/src/base/fphttpclient.pp"
+stage http-unix-before-runner-compile "$compiler" "${before_options[@]}" "$source_dir/packages/fcl-web/tests/testfpweb.lpr"
+echo 'STAGE http-unix-regression-before RUN'
+before_status=0
+"$before_dir/testfpweb" --suite=TTestClientPeers.TestUnixHTTPSWithoutTLSHandler,TTestClientPeers.TestUnixHTTPSWithoutHandlerCallbacks \
+  --format=plain > "$output_dir/http-unix-regression-before.log" 2>&1 || before_status=$?
+cat "$output_dir/http-unix-regression-before.log"
+python3 - "$output_dir/http-unix-regression-before.log" "$before_status" <<'PY'
+from pathlib import Path
+import sys
+text = Path(sys.argv[1]).read_text()
+assert int(sys.argv[2]) != 0, 'Previous HTTP implementation unexpectedly passed'
+assert 'Number of run tests: 2' in text
+assert 'No SSL Socket support compiled in.' in text, 'Missing unregistered-backend regression'
+assert 'Unix route must skip OnGetSocketHandler' in text, 'Missing callback regression'
+print('PASS both regressions reproduced against the exact previous HTTP source')
+PY
+echo 'STAGE http-unix-regression-before PASS (expected failures verified)'
 stage testfpweb-compile "$compiler" "${runner_options[@]}" "$source_dir/packages/fcl-web/tests/testfpweb.lpr"
 stage http-peer-model "$runner_dir/testfpweb" --suite=TTestClientPeers --format=plain
 stage http-protocol-regression "$runner_dir/testfpweb" --suite=TTestHTTPEncode --format=plain

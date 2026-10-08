@@ -1364,10 +1364,10 @@ index 000000000..41100f48a
 +end.
 diff --git a/packages/fcl-net/src/networkframeworksslsockets.pp b/packages/fcl-net/src/networkframeworksslsockets.pp
 new file mode 100644
-index 000000000..85d3796ea
+index 000000000..551f819bf
 --- /dev/null
 +++ b/packages/fcl-net/src/networkframeworksslsockets.pp
-@@ -0,0 +1,541 @@
+@@ -0,0 +1,547 @@
 +{
 +    This file is part of the Free Component Library (FCL).
 +    See COPYING.FPC for copyright and license details.
@@ -1410,6 +1410,7 @@ index 000000000..85d3796ea
 +    function GetLastSSLErrorString: String; override;
 +    function GetLastSSLErrorCode: Integer; override;
 +  public
++    class function RequiresClientPeer: Boolean; override;
 +    function CreateCertGenerator: TX509Certificate; override;
 +    function CreateClientPeer(const Host: String; Port: Word): TClientPeer; override;
 +    function Connect: Boolean; override;
@@ -1523,6 +1524,11 @@ index 000000000..85d3796ea
 +     not SendHostAsSNI or (SSLType<>stAny) then
 +    raise ESSLSocketError.Create('Network.framework custom credentials, trust, '+
 +      'ciphers, ALPN or protocol selection are unsupported');
++end;
++
++class function TNetworkFrameworkSocketHandler.RequiresClientPeer: Boolean;
++begin
++  Result:=True;
 +end;
 +
 +function TNetworkFrameworkSocketHandler.CreateClientPeer(const Host: String;
@@ -2608,7 +2614,7 @@ index 000000000..f52219d28
 +implementation
 +end.
 diff --git a/packages/fcl-net/src/sslsockets.pp b/packages/fcl-net/src/sslsockets.pp
-index 34e74be89..8e2df6c80 100644
+index 34e74be89..3f4b8679e 100644
 --- a/packages/fcl-net/src/sslsockets.pp
 +++ b/packages/fcl-net/src/sslsockets.pp
 @@ -22,10 +22,10 @@ interface
@@ -2624,11 +2630,18 @@ index 34e74be89..8e2df6c80 100644
  {$ENDIF FPC_DOTTEDUNITS}
  
  Const
-@@ -68,6 +68,11 @@   TSSLSocketHandler = class(TSocketHandler)
+@@ -68,6 +68,18 @@   TSSLSocketHandler = class(TSocketHandler)
      Class Procedure SetDefaultHandlerClass(aClass : TSSLSocketHandlerClass);
      Class Function GetDefaultHandlerClass : TSSLSocketHandlerClass;
      Class Function GetDefaultHandler : TSSLSocketHandler;
-+    { Called before a TCP socket is created. Nil preserves the socket path and
++    { Query without creating a handler. True means this provider cannot use an
++      existing socket, so unsupported socket routes must be rejected first. }
++    class function RequiresClientPeer: Boolean; virtual;
++    { Optional factory for providers which own TCP setup. Currently macOS
++      Network.framework owns TCP and TLS and cannot adopt an existing socket.
++      Socket-based providers inherit the nil implementation. Platform and
++      availability checks belong to the provider or selector.
++      Called before a TCP socket is created. Nil preserves the socket path and
 +      leaves Self owned by the caller. A returned unconnected peer owns Self;
 +      on exception ownership stays with the caller. Do not start a connection
 +      or return Nil after a connection/verification failure. }
@@ -2636,10 +2649,15 @@ index 34e74be89..8e2df6c80 100644
      // Socket methods
      Function CreateCertificateData : TCertificateData; virtual;
      Function CreateCertGenerator : TX509Certificate; virtual;
-@@ -112,6 +117,11 @@ implementation
+@@ -112,6 +124,16 @@ implementation
  { TSSLSocketHandler }
  
  
++class function TSSLSocketHandler.RequiresClientPeer: Boolean;
++begin
++  Result:=False;
++end;
++
 +function TSSLSocketHandler.CreateClientPeer(const Host: String; Port: Word): TClientPeer;
 +begin
 +  Result:=Nil;
@@ -3315,10 +3333,10 @@ index 000000000..f3a358765
 +end.
 diff --git a/packages/fcl-net/tests/testnetworkpeer.pp b/packages/fcl-net/tests/testnetworkpeer.pp
 new file mode 100644
-index 000000000..b603157a5
+index 000000000..d4e4a0556
 --- /dev/null
 +++ b/packages/fcl-net/tests/testnetworkpeer.pp
-@@ -0,0 +1,249 @@
+@@ -0,0 +1,250 @@
 +{ Part of FCL; see COPYING.FPC. Tests the public peer, not a raw socket facade. }
 +program testnetworkpeer;
 +{$mode objfpc}{$H+}
@@ -3414,6 +3432,7 @@ index 000000000..b603157a5
 +  B: Byte;
 +begin
 +  Before:=DestroyedHandlers;
++  Check(THandler.RequiresClientPeer,'native provider requires its own transport peer');
 +  H:=THandler.Create;
 +  try
 +    Check(H.CertGenerator<>Nil,'native handler needs no external generator');
@@ -5354,7 +5373,7 @@ index 000000000..c7b48d3c5
 +  end;
 +end.
 diff --git a/packages/fcl-web/src/base/fphttpclient.pp b/packages/fcl-web/src/base/fphttpclient.pp
-index ae0d8d655..59faa6f9d 100644
+index ae0d8d655..971f10e84 100644
 --- a/packages/fcl-web/src/base/fphttpclient.pp
 +++ b/packages/fcl-web/src/base/fphttpclient.pp
 @@ -22,10 +22,10 @@ interface
@@ -5469,16 +5488,17 @@ index ae0d8d655..59faa6f9d 100644
  end;
  
  function TFPCustomHTTPClient.ExtractBuffer: AnsiString;
-@@ -823,46 +840,75 @@ procedure TFPCustomHTTPClient.ConnectToServer(const AHost: String;
+@@ -823,46 +840,95 @@ procedure TFPCustomHTTPClient.ConnectToServer(const AHost: String;
  
  Var
    G : TSocketHandler;
--  {$ifdef Unix}
--  IsUnixSocketConnection: Boolean = False;
--  {$endif}
--
 +  S : TSocketStream;
+   {$ifdef Unix}
+-  IsUnixSocketConnection: Boolean = False;
++  HandlerClass : TSSLSocketHandlerClass;
+   {$endif}
  
+-
  begin
    If IsConnected Then
 -    DisconnectFromServer; // avoid memory leaks
@@ -5500,16 +5520,39 @@ index ae0d8d655..59faa6f9d 100644
 -  IsUnixSocketConnection := UnixSocketPath <> '';
 -  if IsUnixSocketConnection then
 -    FSocket:=TUnixSocket.Create(UnixSocketPath)
-+  if (UnixSocketPath='') or UseSSL then
++  if UnixSocketPath<>'' then
++    begin
++    { Keep the existing Unix socket route: no TLS handler or creation callbacks.
++      A provider which requires its own transport must reject this route without
++      constructing a handler or silently opening a different TCP connection. }
++    if UseSSL then
++      begin
++      HandlerClass:=TSSLSocketHandler.GetDefaultHandlerClass;
++      if Assigned(HandlerClass) and HandlerClass.RequiresClientPeer then
++        raise EHTTPClient.Create('Transport-owning client peers do not support Unix sockets');
++      end;
++    end
+   else
 +  {$endif}
+     begin
+-      G:=GetSocketHandler(UseSSL);
+-      FSocket:=TInetSocket.Create(AHost,APort,G);
 +    G:=GetSocketHandler(UseSSL);
-+  try
-+    if G is TSSLSocketHandler then
-+      FPeer:=TSSLSocketHandler(G).CreateClientPeer(AHost,APort);
-+  except
-+    G.Free;
-+    raise;
-+  end;
++    try
++      { Ask before opening TCP: currently macOS Network.framework owns TCP and
++        TLS. Nil keeps OpenSSL, GnuTLS and Schannel on their socket path; a peer
++        supplies the connection. Platform checks remain in the provider/selector. }
++      if G is TSSLSocketHandler then
++        FPeer:=TSSLSocketHandler(G).CreateClientPeer(AHost,APort);
++    except
++      G.Free;
++      raise;
+     end;
+-  {$else}
+-  G:=GetSocketHandler(UseSSL);
+-  FSocket:=TInetSocket.Create(AHost,APort,G);
+-  {$endif}
++    end;
 +
 +  if Assigned(FPeer) then
 +    begin
@@ -5524,10 +5567,8 @@ index ae0d8d655..59faa6f9d 100644
 +      raise;
 +    end;
 +    end
-   else
-     begin
--      G:=GetSocketHandler(UseSSL);
--      FSocket:=TInetSocket.Create(AHost,APort,G);
++  else
++    begin
 +    {$ifdef Unix}
 +    if UnixSocketPath<>'' then
 +      begin
@@ -5543,11 +5584,7 @@ index ae0d8d655..59faa6f9d 100644
 +    except
 +      S.Free;
 +      raise;
-     end;
--  {$else}
--  G:=GetSocketHandler(UseSSL);
--  FSocket:=TInetSocket.Create(AHost,APort,G);
--  {$endif}
++    end;
 +    end;
 +
    try
@@ -5572,7 +5609,7 @@ index ae0d8d655..59faa6f9d 100644
    end;
  end;
  
-@@ -873,13 +919,8 @@ procedure TFPCustomHTTPClient.ReconnectToServer(const AHost: String; APort: Inte
+@@ -873,13 +939,8 @@ procedure TFPCustomHTTPClient.ReconnectToServer(const AHost: String; APort: Inte
  end;
  
  procedure TFPCustomHTTPClient.DisconnectFromServer;
@@ -5587,7 +5624,7 @@ index ae0d8d655..59faa6f9d 100644
  end;
  
  function TFPCustomHTTPClient.ProtocolSupported(Protocol: String; out IsSSL: Boolean): Boolean;
-@@ -890,12 +931,12 @@ function TFPCustomHTTPClient.ProtocolSupported(Protocol: String; out IsSSL: Bool
+@@ -890,12 +951,12 @@ function TFPCustomHTTPClient.ProtocolSupported(Protocol: String; out IsSSL: Bool
  
  function TFPCustomHTTPClient.ReadFromSocket(var Buffer; Count: Longint): Longint;
  begin
@@ -5602,16 +5639,18 @@ index ae0d8d655..59faa6f9d 100644
  end;
  
  function TFPCustomHTTPClient.AllowHeader(var AHeader: String): Boolean;
-@@ -1610,6 +1651,8 @@ procedure TFPCustomHTTPClient.StartEventStream;
+@@ -1610,6 +1671,10 @@ procedure TFPCustomHTTPClient.StartEventStream;
    lSocket : TSocketStream;
    lBuffer : AnsiString;
  begin
++  { Event sources take ownership of a TSocketStream. A peer without a socket
++    cannot be transferred through this API. }
 +  if Assigned(FPeer) and not (FPeer is TSocketPeer) then
 +    raise EHTTPClient.Create('This client peer does not support event streams');
    lBuffer:=ExtractBuffer;
    lSocket:=ExtractSocket;
    lSource:=CreateEventSource(lSocket,lBuffer);
-@@ -1652,6 +1695,11 @@ procedure TFPCustomHTTPClient.DoKeepConnectionRequest(const AURI: TURI; const AM
+@@ -1652,6 +1717,11 @@ procedure TFPCustomHTTPClient.DoKeepConnectionRequest(const AURI: TURI; const AM
    SkipReconnect := False;
    ACount := 0;
  
@@ -5625,10 +5664,10 @@ index ae0d8d655..59faa6f9d 100644
    and ((TInetSocket(Socket).NetworkAddress.Address<>CHost) or (TInetSocket(Socket).Port<>CPort)) then
 diff --git a/packages/fcl-web/tests/tcclientpeer.pp b/packages/fcl-web/tests/tcclientpeer.pp
 new file mode 100644
-index 000000000..c5b1b1ee8
+index 000000000..cd8113a0b
 --- /dev/null
 +++ b/packages/fcl-web/tests/tcclientpeer.pp
-@@ -0,0 +1,262 @@
+@@ -0,0 +1,379 @@
 +{ Part of FCL; see COPYING.FPC. HTTP peer ownership and dispatch tests. }
 +unit tcclientpeer;
 +{$mode objfpc}{$H+}
@@ -5647,11 +5686,22 @@ index 000000000..c5b1b1ee8
 +  TTestClientPeers = class(TTestCase)
 +  private
 +    FPreviousHandler: TSSLSocketHandlerClass;
++    FGetHandlerCalls, FCreatedHandlerCalls: Integer;
++    procedure GetHandler(Sender: TObject; const UseSSL: Boolean;
++      out Handler: TSocketHandler);
++    procedure HandlerCreated(Sender: TObject; Handler: TSocketHandler);
++    {$ifdef Unix}
++    procedure CheckUnixRoute(WithCallbacks: Boolean);
++    {$endif}
 +  protected
 +    procedure SetUp; override;
 +    procedure TearDown; override;
 +  published
 +    procedure TestOwnershipAndDispatch;
++    {$ifdef Unix}
++    procedure TestUnixHTTPSWithoutTLSHandler;
++    procedure TestUnixHTTPSWithoutHandlerCallbacks;
++    {$endif}
 +  end;
 +
 +implementation
@@ -5678,8 +5728,15 @@ index 000000000..c5b1b1ee8
 +    function GetLastSSLErrorString: String; override;
 +    function GetLastSSLErrorCode: Integer; override;
 +  public
++    constructor Create; override;
 +    destructor Destroy; override;
++    class function RequiresClientPeer: Boolean; override;
 +    function CreateCertGenerator: TX509Certificate; override;
++    function CreateClientPeer(const Host: String; Port: Word): TClientPeer; override;
++  end;
++  TLegacyHandler = class(TTestHandler)
++  public
++    class function RequiresClientPeer: Boolean; override;
 +    function CreateClientPeer(const Host: String; Port: Word): TClientPeer; override;
 +  end;
 +  TClient = class(TFPHTTPClient)
@@ -5693,7 +5750,7 @@ index 000000000..c5b1b1ee8
 +const
 +  Reply = 'HTTP/1.1 200 OK'+#13#10+'Content-Length: 3'+#13#10+#13#10+'abc';
 +var
-+  Peers, Handlers, ConnectedCount, FactoryCalls, Checks: Integer;
++  Peers, Handlers, CreatedHandlers, ConnectedCount, FactoryCalls, Checks: Integer;
 +  FactoryRaises, ConnectRaises: Boolean;
 +  LastVerify: Boolean;
 +
@@ -5722,6 +5779,28 @@ index 000000000..c5b1b1ee8
 +function TTestHandler.GetLastSSLErrorCode: Integer;
 +begin
 +  Result:=0;
++end;
++
++constructor TTestHandler.Create;
++begin
++  inherited Create;
++  Inc(CreatedHandlers);
++end;
++
++class function TTestHandler.RequiresClientPeer: Boolean;
++begin
++  Result:=True;
++end;
++
++class function TLegacyHandler.RequiresClientPeer: Boolean;
++begin
++  Result:=False;
++end;
++
++function TLegacyHandler.CreateClientPeer(const Host: String; Port: Word): TClientPeer;
++begin
++  Inc(FactoryCalls);
++  Result:=Nil;
 +end;
 +
 +destructor TTestHandler.Destroy;
@@ -5812,10 +5891,74 @@ index 000000000..c5b1b1ee8
 +begin
 +  inherited SetUp;
 +  FPreviousHandler:=TSSLSocketHandler.GetDefaultHandlerClass;
-+  Peers:=0; Handlers:=0; ConnectedCount:=0; FactoryCalls:=0; Checks:=0;
++  Peers:=0; Handlers:=0; CreatedHandlers:=0;
++  ConnectedCount:=0; FactoryCalls:=0; Checks:=0;
++  FGetHandlerCalls:=0; FCreatedHandlerCalls:=0;
 +  FactoryRaises:=False; ConnectRaises:=False; LastVerify:=False;
 +  TSSLSocketHandler.SetDefaultHandlerClass(TTestHandler);
 +end;
++
++procedure TTestClientPeers.GetHandler(Sender: TObject; const UseSSL: Boolean;
++  out Handler: TSocketHandler);
++begin
++  Inc(FGetHandlerCalls);
++  Handler:=Nil;
++end;
++
++procedure TTestClientPeers.HandlerCreated(Sender: TObject; Handler: TSocketHandler);
++begin
++  Inc(FCreatedHandlerCalls);
++end;
++
++{$ifdef Unix}
++procedure TTestClientPeers.CheckUnixRoute(WithCallbacks: Boolean);
++var
++  C: TClient;
++  Server: TUnixServer;
++  SocketName: String;
++begin
++  SocketName:=GetTempFileName('','fpc-http-peer-');
++  Server:=Nil;
++  C:=Nil;
++  try
++    Server:=TUnixServer.Create(SocketName);
++    Server.Listen;
++    C:=TClient.Create(Nil);
++    C.UnixSocketPath:=SocketName;
++    if WithCallbacks then
++      begin
++      TSSLSocketHandler.SetDefaultHandlerClass(TLegacyHandler);
++      C.OnGetSocketHandler:=@GetHandler;
++      C.AfterSocketHandlerCreate:=@HandlerCreated;
++      end
++    else
++      TSSLSocketHandler.SetDefaultHandlerClass(Nil);
++    { HTTPS must retain the historical explicit Unix socket route, including
++      its independence from TLS handler registration and creation callbacks. }
++    C.Open('unused.invalid',0,True);
++    AssertTrue('HTTPS Unix route exposes the original Unix socket',C.Socket is TUnixSocket);
++    AssertTrue('Unix socket connection established',C.Connected);
++    AssertEquals('Unix route must skip OnGetSocketHandler',0,FGetHandlerCalls);
++    AssertEquals('Unix route must skip AfterSocketHandlerCreate',0,FCreatedHandlerCalls);
++    AssertEquals('Unix route must not construct a TLS handler',0,CreatedHandlers);
++    AssertEquals('Unix route must not call a TLS peer factory',0,FactoryCalls);
++  finally
++    C.Free;
++    Server.Free;
++    DeleteFile(SocketName);
++  end;
++end;
++
++procedure TTestClientPeers.TestUnixHTTPSWithoutTLSHandler;
++begin
++  CheckUnixRoute(False);
++end;
++
++procedure TTestClientPeers.TestUnixHTTPSWithoutHandlerCallbacks;
++begin
++  CheckUnixRoute(True);
++end;
++{$endif}
 +
 +procedure TTestClientPeers.TearDown;
 +begin
@@ -5828,8 +5971,14 @@ index 000000000..c5b1b1ee8
 +var
 +  C: TClient;
 +  P, H, N: Integer;
++  {$ifdef Unix}
++  F, Created: Integer;
++  {$endif}
 +  Failed: Boolean;
 +begin
++    Check(not TSSLSocketHandler.RequiresClientPeer,'default provider retains socket route');
++    Check(not TLegacyHandler.RequiresClientPeer,'legacy provider retains socket route');
++    Check(TTestHandler.RequiresClientPeer,'transport-owning provider declares peer requirement');
 +    C:=TClient.Create(Nil);
 +    try
 +      C.ConnectTimeout:=31;
@@ -5880,9 +6029,16 @@ index 000000000..c5b1b1ee8
 +      Check((Peers=P+1) and (Handlers=H+1),'proxy rejection frees owned handler once');
 +      C.Proxy.Host:='';
 +      C.UnixSocketPath:='/no-socket';
++      {$ifdef Unix}
++      F:=FactoryCalls; Created:=CreatedHandlers;
++      {$endif}
 +      Failed:=False;
 +      try C.Open('target.invalid',443,True) except on E: EHTTPClient do Failed:=True end;
 +      Check(Failed and (ConnectedCount=N),'Unix route rejected before native Connect');
++      {$ifdef Unix}
++      Check((FactoryCalls=F) and (CreatedHandlers=Created),
++        'Unix route rejected without constructing a transport-owning handler');
++      {$endif}
 +      C.UnixSocketPath:='';
 +    finally C.Free end;
 +    Check(Peers=Handlers-1,'all peers/handlers released, including factory failure');

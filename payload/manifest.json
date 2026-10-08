@@ -2,11 +2,11 @@
   "base_repository": "https://gitlab.com/freepascal.org/fpc/source",
   "base_commit": "2ec3f7a440e3c7b80cba4f7d2a7814c7bb36947b",
   "source_branch": "feature/smart-native-tls-minimal",
-  "prerequisite_tree": "476e6ac16d1a0d57cbf87ba987d4ce9aadc9c190",
-  "final_tree": "918127d988deed956ec6e936559d685c0d73fe3d",
-  "patch_sha256": "f95befd2e33790d0a3bbb3cc05844caeeb2150dd10859a995ac68762b8bd2a3d",
+  "prerequisite_tree": "323cdf1af6c8fde9078d070b6a13dc6c521d2d0c",
+  "final_tree": "ca4f0d92f69094b038aecb618027f398f653f81e",
+  "patch_sha256": "433930ee0d81356bfc83f4b52ff7ddbd764543a859a23a994f75e64e1d358da5",
   "smart_patch_sha256": "bd3b5ac8ac962fc9eb9a5977585cda86fb73a3ef319c1b1b9d79cfda950f3a71",
-  "prerequisite_patch_sha256": "741c370584889de548b845958a61f4bcd72d6cd22b20695cd189498c22c54cc8",
+  "prerequisite_patch_sha256": "37c07d9df69cefec0df379ea1700a8f2e369ae0cc76305425d54c248d83b485e",
   "files": [
     {
       "path": "packages/fcl-tls/Makefile",
@@ -124,7 +124,7 @@
     },
     {
       "path": "packages/fcl-net/src/networkframeworksslsockets.pp",
-      "sha256": "55573ea67524ec6d9523817000b32837edb23e6887231c9069883d6161843681"
+      "sha256": "ef8a67fbfc66b33cd61f7dee6e450c9b56aecd634c9a3d1a95c47a64b7463ae7"
     },
     {
       "path": "packages/fcl-net/src/schannelsslsockets.pp",
@@ -136,7 +136,7 @@
     },
     {
       "path": "packages/fcl-net/src/sslsockets.pp",
-      "sha256": "d68338d52b2a3bbb9b005a2029339969e61685b56d087b6d27b0939370f925ac"
+      "sha256": "19f244a65e51a919e4f7eb42a16e4a5a37a3c1f29fafc747515492eed2136522"
     },
     {
       "path": "packages/fcl-net/tests/networkframeworkmodel.inc",
@@ -152,7 +152,7 @@
     },
     {
       "path": "packages/fcl-net/tests/testnetworkpeer.pp",
-      "sha256": "174f2bc120c5850d5c348a3c62712914780b9874002a35d4b3faa1eb4380eac5"
+      "sha256": "482a362de89c92cfc2deaa26cd5c5640ee079a9a05986107ef060ea5e95f8d19"
     },
     {
       "path": "packages/fcl-net/tests/testschannel.pp",
@@ -160,11 +160,11 @@
     },
     {
       "path": "packages/fcl-web/src/base/fphttpclient.pp",
-      "sha256": "f37f756f002818e0aa017c04ba6eccb9b6ac04305233875029fbf08531d050bd"
+      "sha256": "f5eabbaeeddfc9e85cef2777532c7c3f06e7b4fa6a9daa8b0bca47914155e7aa"
     },
     {
       "path": "packages/fcl-web/tests/tcclientpeer.pp",
-      "sha256": "f2fdb44a30838d453de84449097863e4adf41096af93a3dd2c8b6b93382129ed"
+      "sha256": "fde2d747d1cf9bab9f53c24a353cd59281e39b0f2209d800c65cb069108b37cb"
     },
     {
       "path": "packages/fcl-web/tests/testfpweb.lpr",
@@ -222,7 +222,7 @@
     },
     {
       "path": "packages/fcl-net/src/networkframeworksslsockets.pp",
-      "sha256": "55573ea67524ec6d9523817000b32837edb23e6887231c9069883d6161843681"
+      "sha256": "ef8a67fbfc66b33cd61f7dee6e450c9b56aecd634c9a3d1a95c47a64b7463ae7"
     },
     {
       "path": "packages/fcl-net/src/schannelsslsockets.pp",
@@ -234,7 +234,7 @@
     },
     {
       "path": "packages/fcl-net/src/sslsockets.pp",
-      "sha256": "d68338d52b2a3bbb9b005a2029339969e61685b56d087b6d27b0939370f925ac"
+      "sha256": "19f244a65e51a919e4f7eb42a16e4a5a37a3c1f29fafc747515492eed2136522"
     },
     {
       "path": "packages/fcl-net/tests/networkframeworkmodel.inc",
@@ -250,7 +250,7 @@
     },
     {
       "path": "packages/fcl-net/tests/testnetworkpeer.pp",
-      "sha256": "174f2bc120c5850d5c348a3c62712914780b9874002a35d4b3faa1eb4380eac5"
+      "sha256": "482a362de89c92cfc2deaa26cd5c5640ee079a9a05986107ef060ea5e95f8d19"
     },
     {
       "path": "packages/fcl-net/tests/testschannel.pp",
@@ -306,11 +306,11 @@
     },
     {
       "path": "packages/fcl-web/src/base/fphttpclient.pp",
-      "sha256": "f37f756f002818e0aa017c04ba6eccb9b6ac04305233875029fbf08531d050bd"
+      "sha256": "f5eabbaeeddfc9e85cef2777532c7c3f06e7b4fa6a9daa8b0bca47914155e7aa"
     },
     {
       "path": "packages/fcl-web/tests/tcclientpeer.pp",
-      "sha256": "f2fdb44a30838d453de84449097863e4adf41096af93a3dd2c8b6b93382129ed"
+      "sha256": "fde2d747d1cf9bab9f53c24a353cd59281e39b0f2209d800c65cb069108b37cb"
     },
     {
       "path": "packages/fcl-web/tests/testfpweb.lpr",
@@ -349,5 +349,11 @@
     "packages/openssl/src/openssl.pas"
   ],
   "source_only": true,
-  "new_support_scripts_or_docs": false
+  "new_support_scripts_or_docs": false,
+  "unix_route_regression": {
+    "prior_commit": "2abfe69ab5af676c38a6bfd4012e4fcd36a206bd",
+    "path": "packages/fcl-web/src/base/fphttpclient.pp",
+    "prior_source_sha256": "f37f756f002818e0aa017c04ba6eccb9b6ac04305233875029fbf08531d050bd",
+    "reverse_patch": "diff --git a/packages/fcl-web/src/base/fphttpclient.pp b/packages/fcl-web/src/base/fphttpclient.pp\nindex 971f10e84..59faa6f9d 100644\n--- a/packages/fcl-web/src/base/fphttpclient.pp\n+++ b/packages/fcl-web/src/base/fphttpclient.pp\n@@ -841,9 +841,6 @@ procedure TFPCustomHTTPClient.ConnectToServer(const AHost: String;\n Var\n   G : TSocketHandler;\n   S : TSocketStream;\n-  {$ifdef Unix}\n-  HandlerClass : TSSLSocketHandlerClass;\n-  {$endif}\n \n begin\n   If IsConnected Then\n@@ -859,33 +856,16 @@ procedure TFPCustomHTTPClient.ConnectToServer(const AHost: String;\n \n   G:=Nil;\n   {$ifdef Unix}\n-  if UnixSocketPath<>'' then\n-    begin\n-    { Keep the existing Unix socket route: no TLS handler or creation callbacks.\n-      A provider which requires its own transport must reject this route without\n-      constructing a handler or silently opening a different TCP connection. }\n-    if UseSSL then\n-      begin\n-      HandlerClass:=TSSLSocketHandler.GetDefaultHandlerClass;\n-      if Assigned(HandlerClass) and HandlerClass.RequiresClientPeer then\n-        raise EHTTPClient.Create('Transport-owning client peers do not support Unix sockets');\n-      end;\n-    end\n-  else\n+  if (UnixSocketPath='') or UseSSL then\n   {$endif}\n-    begin\n     G:=GetSocketHandler(UseSSL);\n-    try\n-      { Ask before opening TCP: currently macOS Network.framework owns TCP and\n-        TLS. Nil keeps OpenSSL, GnuTLS and Schannel on their socket path; a peer\n-        supplies the connection. Platform checks remain in the provider/selector. }\n-      if G is TSSLSocketHandler then\n-        FPeer:=TSSLSocketHandler(G).CreateClientPeer(AHost,APort);\n-    except\n-      G.Free;\n-      raise;\n-    end;\n-    end;\n+  try\n+    if G is TSSLSocketHandler then\n+      FPeer:=TSSLSocketHandler(G).CreateClientPeer(AHost,APort);\n+  except\n+    G.Free;\n+    raise;\n+  end;\n \n   if Assigned(FPeer) then\n     begin\n@@ -1671,8 +1651,6 @@ procedure TFPCustomHTTPClient.StartEventStream;\n   lSocket : TSocketStream;\n   lBuffer : AnsiString;\n begin\n-  { Event sources take ownership of a TSocketStream. A peer without a socket\n-    cannot be transferred through this API. }\n   if Assigned(FPeer) and not (FPeer is TSocketPeer) then\n     raise EHTTPClient.Create('This client peer does not support event streams');\n   lBuffer:=ExtractBuffer;\n"
+  }
 }

@@ -4,6 +4,12 @@ root=Path(__file__).resolve().parent.parent
 m=json.loads((root/'payload/manifest.json').read_text())
 assert m['base_repository']=='https://gitlab.com/freepascal.org/fpc/source'
 assert re.fullmatch('[0-9a-f]{40}',m['base_commit'])
+regression=m['unix_route_regression']
+assert re.fullmatch('[0-9a-f]{40}',regression['prior_commit'])
+assert re.fullmatch('[0-9a-f]{64}',regression['prior_source_sha256'])
+assert regression['path']=='packages/fcl-web/src/base/fphttpclient.pp'
+assert regression['reverse_patch'].count('diff --git ')==1
+assert regression['reverse_patch'].startswith('diff --git a/'+regression['path']+' b/'+regression['path']+'\n')
 combined=(root/'payload/native-tls.patch').read_bytes()
 smart=(root/'payload/smart-tls.patch').read_bytes()
 assert hashlib.sha256(combined).hexdigest()==m['patch_sha256']
