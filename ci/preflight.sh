@@ -141,11 +141,16 @@ shutil.copyfile(source/regression['path'], target)
 subprocess.run(['git', 'apply', '--check', '-'], input=regression['reverse_patch'].encode(), cwd=before, check=True)
 subprocess.run(['git', 'apply', '-'], input=regression['reverse_patch'].encode(), cwd=before, check=True)
 assert hashlib.sha256(target.read_bytes()).hexdigest() == regression['prior_source_sha256']
+for name in ['testfpweb.lpr', 'tcclientpeer.pp']:
+    shutil.copyfile(source/'packages/fcl-web/tests'/name, before/name)
 print('PASS exact previous HTTP source', regression['prior_commit'], regression['prior_source_sha256'])
 PY
-before_options=("-Fu$before_dir" "${runner_options[@]}" "-FU$before_dir" "-FE$before_dir")
-stage http-unix-before-unit-compile "$compiler" "${before_options[@]}" "$before_dir/packages/fcl-web/src/base/fphttpclient.pp"
-stage http-unix-before-runner-compile "$compiler" "${before_options[@]}" "$source_dir/packages/fcl-web/tests/testfpweb.lpr"
+before_options=("-Fu$before_dir" "${runner_options[@]}" "-Fu$source_dir/packages/fcl-web/tests" "-FU$before_dir" "-FE$before_dir")
+compile_previous_http() {
+  (cd "$before_dir"; "$compiler" "${before_options[@]}" "$@")
+}
+stage http-unix-before-unit-compile compile_previous_http "$before_dir/packages/fcl-web/src/base/fphttpclient.pp"
+stage http-unix-before-runner-compile compile_previous_http "$before_dir/testfpweb.lpr"
 echo 'STAGE http-unix-regression-before RUN'
 before_status=0
 "$before_dir/testfpweb" --suite=TTestClientPeers.TestUnixHTTPSWithoutTLSHandler,TTestClientPeers.TestUnixHTTPSWithoutHandlerCallbacks \
