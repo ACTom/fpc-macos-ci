@@ -34,8 +34,7 @@ tests="$src/packages/fcl-net/tests"
 for t in thandlesconnect tsslselect testnetworkframework; do
   if [[ -f "$tests/$t.pp" ]]; then
     if compile "$tests/$t.pp"; then
-      args=(); [[ "$t" = tsslselect ]] && args=(all)
-      run "$out/$t" "${args[@]}"
+      if [[ "$t" = tsslselect ]]; then run "$out/$t" all; else run "$out/$t"; fi
     else
       echo "=== FAIL compile $t"; failed=1
     fi

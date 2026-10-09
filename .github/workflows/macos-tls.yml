@@ -13,6 +13,10 @@ jobs:
     name: macOS ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 40
+    defaults:
+      run:
+        # bash -eo pipefail, so a failing test.sh is not hidden by tee
+        shell: bash
     strategy:
       fail-fast: false
       matrix:
