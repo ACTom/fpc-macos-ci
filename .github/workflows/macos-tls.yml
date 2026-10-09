@@ -1,0 +1,43 @@
+name: FPC macOS TLS
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: Branch of gitlab.com/ACTom/source to test
+        required: true
+        default: feature/networkframework-peer-minimal
+permissions:
+  contents: read
+jobs:
+  test:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15-intel
+            arch: x86_64
+          - runner: macos-15
+            arch: arm64
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          persist-credentials: false
+      - name: Clone FPC branch
+        env:
+          BRANCH: ${{ inputs.branch }}
+        run: git clone --depth 1 --branch "$BRANCH" https://gitlab.com/ACTom/source.git "$RUNNER_TEMP/fpc-source"
+      - name: Bootstrap FPC 3.2.2
+        run: bash ci/bootstrap.sh '${{ matrix.arch }}'
+      - name: Build and test
+        run: bash ci/test.sh "$RUNNER_TEMP/fpc-source" "$RUNNER_TEMP/out" '${{ matrix.arch }}' 2>&1 | tee "$RUNNER_TEMP/test.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: logs-${{ matrix.arch }}
+          retention-days: 7
+          path: |
+            ${{ runner.temp }}/test.log
+            ${{ runner.temp }}/out/*.log
